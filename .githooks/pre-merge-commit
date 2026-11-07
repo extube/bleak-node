@@ -1,0 +1,12 @@
+#!/bin/sh
+# Blocks:
+#   - any local merge INTO main (release-only: merges land via GitHub PR)
+branch=$(git symbolic-ref --quiet --short HEAD || true)
+
+if [ "$branch" = "main" ]; then
+  echo >&2 "BLOCKED: local merges into 'main' are forbidden."
+  echo >&2 "        main is release-only — open a dev->main pull request instead."
+  exit 1
+fi
+
+exit 0
