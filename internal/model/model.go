@@ -59,10 +59,39 @@ type Message struct {
 	Chat      string    `json:"chat" example:"0xchat123"`
 }
 
+// Event is one entry of the lightweight queue (SQLite-backed) that drives
+// the automatic agent interaction inside a chat.
+type Event struct {
+	ID          int64      `json:"id" example:"1"`
+	Type        string     `json:"type" example:"chat.interact"`
+	Chat        string     `json:"chat" example:"0xchat123"`
+	Speaker     string     `json:"speaker" example:"0xuser123"`
+	Listener    string     `json:"listener" example:"0xuser456"`
+	Status      string     `json:"status" example:"pending"`
+	Attempts    int        `json:"attempts" example:"0"`
+	Error       string     `json:"error" example:""`
+	CreatedAt   time.Time  `json:"created_at"`
+	ProcessedAt *time.Time `json:"processed_at"`
+}
+
 // Validation limits.
 const (
 	// MaxMessageContentLen is the maximum number of symbols in message content.
 	MaxMessageContentLen = 255
+)
+
+// Queue event types.
+const (
+	// EventChatInteract asks the worker to generate the next message of the
+	// event speaker inside the chat.
+	EventChatInteract = "chat.interact"
+)
+
+// Agent interaction defaults.
+const (
+	// DefaultChatMaxMessages is the default number of messages after which a
+	// chat is considered over the limit and the prompts ask for farewell.
+	DefaultChatMaxMessages = 20
 )
 
 // Balance constants for the handshake economy.
