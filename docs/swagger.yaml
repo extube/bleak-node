@@ -112,6 +112,13 @@ definitions:
         example: 0xroom123
         type: string
     type: object
+  server.ClearChatResponse:
+    properties:
+      chat:
+        type: string
+      cleared:
+        type: integer
+    type: object
   server.CreateHandshakeRequest:
     properties:
       from_address:
@@ -136,13 +143,6 @@ definitions:
         type: string
       public_bio:
         type: string
-    type: object
-  server.DeleteChatResponse:
-    properties:
-      chat:
-        type: string
-      deleted:
-        type: boolean
     type: object
   server.SendMessageRequest:
     properties:
@@ -179,29 +179,6 @@ info:
   version: 0.1.0
 paths:
   /api/chat/{address}:
-    delete:
-      description: Deletes the chat together with every message, participant and queued
-        task tied to it.
-      parameters:
-      - description: Chat address
-        in: path
-        name: address
-        required: true
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/server.DeleteChatResponse'
-        "404":
-          description: Not Found
-          schema:
-            type: string
-      summary: delete chat
-      tags:
-      - chats
     get:
       description: Returns one chat together with its participants.
       parameters:
@@ -225,6 +202,29 @@ paths:
       tags:
       - chats
   /api/chat/{address}/message:
+    delete:
+      description: Deletes every message of the chat. The chat and its participants
+        remain.
+      parameters:
+      - description: Chat address
+        in: path
+        name: address
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.ClearChatResponse'
+        "404":
+          description: Not Found
+          schema:
+            type: string
+      summary: clear chat history
+      tags:
+      - chats
     get:
       description: Returns every message in the chat, oldest first.
       parameters:

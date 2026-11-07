@@ -70,17 +70,31 @@ func (d *DB) CreateHandshake(ctx context.Context, hs *model.Handshake) (bool, er
 	}
 	if found {
 		*hs = existing
-		// Re-init: when the pair's chat was deleted meanwhile, the next
-		// request for the pair starts a fresh chat where the requester
+		// Re-init: when the pair is complete (both directions exist) but has
+		// no live chat (or an empty one after a history clear), the next
+		// request restarts the interaction where the requester
 		// (hs.FromAddress) is the first speaker.
-		chat, chatCreated, err := ensureChat(ctx, tx, hs.Room, hs.FromAddress, hs.ToAddress)
+		both, err := bothHandshakeDirections(ctx, tx, hs.FromAddress, hs.ToAddress)
 		if err != nil {
 			return false, err
 		}
-		if chatCreated {
-			if err := enqueueEvent(ctx, tx, model.EventChatInteract,
-				chat.Address, hs.FromAddress, hs.ToAddress); err != nil {
+		if both {
+			chat, chatCreated, err := ensureChat(ctx, tx, hs.Room, hs.FromAddress, hs.ToAddress)
+			if err != nil {
 				return false, err
+			}
+			var count int64
+			if !chatCreated {
+				if err := tx.QueryRowContext(ctx,
+					`SELECT COUNT(*) FROM messages WHERE chat = ?`, chat.Address).Scan(&count); err != nil {
+					return false, err
+				}
+			}
+			if chatCreated || count == 0 {
+				if err := enqueueEvent(ctx, tx, model.EventChatInteract,
+					chat.Address, hs.FromAddress, hs.ToAddress); err != nil {
+					return false, err
+				}
 			}
 		}
 		if err := tx.Commit(); err != nil {
