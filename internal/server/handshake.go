@@ -21,7 +21,7 @@ const maxAddressLen = 64
 // CreateHandshake registers a handshake between two users.
 //
 //	@Summary		create handshake
-//	@Description	Registers a handshake between two existing users with a server-generated tx id. Status must be in {0,1,2,3,4}.
+//	@Description	Registers a handshake between two existing users with a server-generated tx id. Status must be in {1,2,3,4}; the sender's income must exceed its outcome.
 //	@Tags			handshakes
 //	@Accept			json
 //	@Produce		json
@@ -51,7 +51,7 @@ func (s *Server) CreateHandshake(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if !db.IsValidStatus(req.Status) {
-		respond(w, http.StatusBadRequest, "status must be one of {0,1,2,3,4}")
+		respond(w, http.StatusBadRequest, "status must be one of {1,2,3,4}")
 		return
 	}
 

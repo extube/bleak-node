@@ -10,14 +10,35 @@ import (
 	"github.com/extube/bleak-node/internal/model"
 )
 
-// CreateUser inserts a user linked to the given room.
+// CreateUser inserts a user linked to the given room and atomically creates
+// the system "welcome" handshake (room -> user, value 10) so the user starts
+// with a positive balance. Rooms have a max_user capacity.
 func (d *DB) CreateUser(ctx context.Context, roomAddress string, user *model.User) error {
-	ok, err := d.RoomExists(ctx, roomAddress)
+	tx, err := d.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	if !ok {
+	defer func() { _ = tx.Rollback() }()
+
+	var roomMax int
+	err = tx.QueryRowContext(ctx,
+		`SELECT max_user FROM rooms WHERE address = ? AND deleted_at IS NULL`, roomAddress).Scan(&roomMax)
+	if errors.Is(err, sql.ErrNoRows) {
 		return errors.Join(ErrNotFound, fmt.Errorf("room %q not found", roomAddress))
+	}
+	if err != nil {
+		return err
+	}
+
+	// Enforce room capacity.
+	var cnt int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM users WHERE room = ? AND deleted_at IS NULL`, roomAddress).Scan(&cnt); err != nil {
+		return err
+	}
+	if cnt >= roomMax {
+		return errors.Join(ErrConflict, fmt.Errorf(
+			"room %q is full: %d users of max_user %d", roomAddress, cnt, roomMax))
 	}
 
 	now := time.Now().UTC()
@@ -26,9 +47,10 @@ func (d *DB) CreateUser(ctx context.Context, roomAddress string, user *model.Use
 	user.UpdatedAt = now
 
 	// Address is generated server-side; retry on the unlikely collision.
+	inserted := false
 	for attempt := 0; attempt < 3; attempt++ {
 		user.Address = newAddress(16)
-		_, err = d.ExecContext(ctx,
+		_, err = tx.ExecContext(ctx,
 			`INSERT INTO users (address, name, room, public_bio, private_bio, created_at, updated_at, deleted_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`,
 			user.Address, user.Name, roomAddress, user.PublicBio, user.PrivateBio,
@@ -37,9 +59,21 @@ func (d *DB) CreateUser(ctx context.Context, roomAddress string, user *model.Use
 		if isUnique(err) {
 			continue
 		}
+		if err != nil {
+			return err
+		}
+		inserted = true
+		break
+	}
+	if !inserted {
+		return errors.Join(ErrConflict, errors.New("could not generate unique user address"))
+	}
+
+	// Welcome handshake: from the room to the new user, value 10.
+	if _, err := createSystemHandshake(ctx, tx, roomAddress, user.Address); err != nil {
 		return err
 	}
-	return errors.Join(ErrConflict, errors.New("could not generate unique user address"))
+	return tx.Commit()
 }
 
 // ListRoomUsers returns all non-deleted users of a room.
