@@ -1,0 +1,71 @@
+#!/bin/sh
+# Enforce the git workflow:
+#   - no direct commits on dev or main
+#   - merge commits into dev are only allowed when syncing FROM main
+#     (feature branches merge into dev with `git merge --squash`)
+#   - every working branch must be named feat|bug|hotfix/#<task>-<slug>
+branch=$(git symbolic-ref --quiet --short HEAD || true)
+
+if [ -f "$(git rev-parse --git-dir)/MERGE_HEAD" ]; then
+  # A merge is being finished with a merge commit.
+  if [ "$branch" = "main" ]; then
+    echo >&2 "BLOCKED: merging into 'main' locally is forbidden."
+    echo >&2 "        main is release-only — merge via a dev->main GitHub PR."
+    exit 1
+  fi
+  if [ "$branch" = "dev" ]; then
+    merge_src=$(git rev-parse MERGE_HEAD 2>/dev/null)
+    main_sha=$(git rev-parse refs/heads/main 2>/dev/null || git rev-parse refs/remotes/origin/main 2>/dev/null || true)
+    if [ -n "$main_sha" ] && [ "$merge_src" != "$main_sha" ]; then
+      echo >&2 "BLOCKED: merge commits into 'dev' are only allowed when syncing from 'main'."
+      echo >&2 "        To land a feature/bug/hotfix branch, run:  git merge --squash <branch>"
+      echo >&2 "        (then commit the squashed result on dev with a feat|fix: [#n] message)."
+      exit 1
+    fi
+  fi
+  exit 0
+fi
+
+# Plain (non-merge) commit.
+gitdir=$(git rev-parse --git-dir)
+
+case "$branch" in
+  main)
+    echo >&2 "BLOCKED: committing to 'main' is forbidden — release-only, PRs only."
+    exit 1
+    ;;
+  dev)
+    head_sha=$(git rev-parse HEAD)
+    orig_sha=$(git rev-parse ORIG_HEAD 2>/dev/null)
+    if [ -f "$gitdir/SQUASH_MSG" ]; then
+      # Non-FF squash landing: git merge --squash <branch> && git commit.
+      exit 0
+    fi
+    if [ -n "$orig_sha" ] && [ "$head_sha" = "$orig_sha" ] \
+      && ! git diff --cached --quiet --unified=0 2>/dev/null; then
+      # FF squash landing: --squash fast-forwarded the index without leaving
+      # SQUASH_MSG (git quirk); HEAD == ORIG_HEAD + staged diff gives it away.
+      exit 0
+    fi
+    echo >&2 "BLOCKED: committing directly to 'dev' is forbidden."
+    echo >&2 "        Create a branch:      git checkout -b feat|#bug|hotfix/#<task>-<slug>"
+    echo >&2 "        Land it with squash:  git checkout dev && git merge --squash <branch>"
+    exit 1
+    ;;
+esac
+
+case "$branch" in
+  feat/#*-*|bug/#*-*|hotfix/#*-*) ;;
+  "")
+    echo >&2 "BLOCKED: detached HEAD — create a named branch before committing."
+    exit 1
+    ;;
+  *)
+    echo >&2 "BLOCKED: branch '$branch' does not match the naming convention."
+    echo >&2 "        required prefix pattern: feat|bug|hotfix/#<task-number>-<short-name>"
+    echo >&2 "        e.g. feat/#12-qr-camera, bug/#13-token-claim, hotfix/#14-relay-ws"
+    exit 1
+    ;;
+esac
+
+exit 0

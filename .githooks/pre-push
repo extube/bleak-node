@@ -1,0 +1,14 @@
+#!/bin/sh
+# Block pushes that would update refs/heads/main (or any protected apply to main).
+# main is release-only: it is updated exclusively by the owner's GitHub PR merge.
+set -- "$@" # standardize args (pre-push reads stdin instead)
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+  case "$remote_ref" in
+    refs/heads/main)
+      echo >&2 "BLOCKED: pushing 'main' is forbidden."
+      echo >&2 "        main is release-only — open a dev->main pull request instead."
+      exit 1
+      ;;
+  esac
+done
+exit 0

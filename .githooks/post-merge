@@ -1,0 +1,20 @@
+#!/bin/sh
+# Unwind illegal MERGE COMMITS into dev (squash-only rule, sync-from-main
+# exception). FF merges and `merge --squash` landings pass through.
+branch=$(git symbolic-ref --quiet --short HEAD || true)
+[ "$branch" = "dev" ] || exit 0
+
+p2=$(git rev-parse "HEAD^2" 2>/dev/null) || exit 0
+main_local=$(git rev-parse refs/heads/main 2>/dev/null)
+main_remote=$(git rev-parse refs/remotes/origin/main 2>/dev/null)
+
+if [ "$p2" != "$main_local" ] && [ "$p2" != "$main_remote" ]; then
+  echo >&2 "BLOCKED: merge commits into 'dev' are only allowed when syncing from 'main'."
+  echo >&2 "        Unwinding this merge; land the branch with:"
+  echo >&2 "        git merge --squash <branch>  (then commit with a feat|fix: [#n] message)"
+  git reset --hard "HEAD^1" >/dev/null 2>&1
+  echo >&2 "        dev was rewound to: $(git rev-parse --short HEAD)"
+  exit 1
+fi
+
+exit 0
