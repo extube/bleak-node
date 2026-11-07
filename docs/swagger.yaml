@@ -144,6 +144,15 @@ definitions:
       public_bio:
         type: string
     type: object
+  server.KickoffResponse:
+    properties:
+      chat:
+        type: string
+      cleared:
+        type: integer
+      speaker:
+        type: string
+    type: object
   server.SendMessageRequest:
     properties:
       content:
@@ -199,6 +208,32 @@ paths:
           schema:
             type: string
       summary: get chat
+      tags:
+      - chats
+  /api/chat/{address}/kickoff:
+    post:
+      description: Clears the message history of the chat and returns the interaction
+        to the queue. The speaker of the first turn is the user who sent the pair's
+        earliest handshake; the agents then continue automatically until the chat
+        limit.
+      parameters:
+      - description: Chat address
+        in: path
+        name: address
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/server.KickoffResponse'
+        "404":
+          description: Not Found
+          schema:
+            type: string
+      summary: kick off chat
       tags:
       - chats
   /api/chat/{address}/message:

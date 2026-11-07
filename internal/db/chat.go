@@ -226,6 +226,88 @@ func (d *DB) ClearChatMessages(ctx context.Context, chatAddress string) (int64, 
 	return res.RowsAffected()
 }
 
+// ChatKickoffResult reports what a kickoff did.
+type ChatKickoffResult struct {
+	Chat    string `json:"chat"`
+	Cleared int64  `json:"cleared"`
+	Speaker string `json:"speaker"`
+}
+
+// ChatKickoff clears the message history of the chat and queues a fresh
+// chat.interact event. The first speaker is the sender of the earliest
+// handshake between the pair. Everything happens in one transaction, so the
+// history wipe and the new turn appear atomically.
+func (d *DB) ChatKickoff(ctx context.Context, chatAddress string) (ChatKickoffResult, error) {
+	res := ChatKickoffResult{Chat: chatAddress}
+
+	tx, err := d.BeginTx(ctx, nil)
+	if err != nil {
+		return res, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// The chat must exist.
+	var exists string
+	err = tx.QueryRowContext(ctx, `SELECT address FROM chats WHERE address = ?`, chatAddress).Scan(&exists)
+	if errors.Is(err, sql.ErrNoRows) {
+		return res, errors.Join(ErrNotFound, err)
+	}
+	if err != nil {
+		return res, err
+	}
+
+	// Wipe the history inside the same transaction.
+	cr, err := tx.ExecContext(ctx, `DELETE FROM messages WHERE chat = ?`, chatAddress)
+	if err != nil {
+		return res, err
+	}
+	res.Cleared, _ = cr.RowsAffected()
+
+	// The two participants decide the participants; the earliest handshake
+	// decides who speaks first.
+	rows, err := tx.QueryContext(ctx, `SELECT user FROM participants WHERE chat = ? ORDER BY user ASC`, chatAddress)
+	if err != nil {
+		return res, err
+	}
+	parts := []string{}
+	for rows.Next() {
+		var u string
+		if err := rows.Scan(&u); err != nil {
+			_ = rows.Close()
+			return res, err
+		}
+		parts = append(parts, u)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return res, err
+	}
+	_ = rows.Close()
+	if len(parts) != 2 || parts[0] == parts[1] {
+		return res, errors.Join(ErrInvalid, fmt.Errorf(
+			"chat %q does not have exactly two participants", chatAddress))
+	}
+
+	var a, b string
+	err = tx.QueryRowContext(ctx, `
+SELECT from_address, to_address FROM handshakes
+WHERE (from_address = ? AND to_address = ?) OR (from_address = ? AND to_address = ?)
+ORDER BY created_at ASC, tx_id ASC LIMIT 1`, parts[0], parts[1], parts[1], parts[0]).
+		Scan(&a, &b)
+	if err != nil {
+		return res, err
+	}
+
+	if err := enqueueEvent(ctx, tx, model.EventChatInteract, chatAddress, a, b); err != nil {
+		return res, err
+	}
+	if err := tx.Commit(); err != nil {
+		return res, err
+	}
+	res.Speaker = a
+	return res, nil
+}
+
 // roomHasUser reports whether a non-deleted user belongs to the room.
 func (d *DB) roomHasUser(ctx context.Context, roomAddress, address string) (bool, error) {
 	return d.exists(ctx,

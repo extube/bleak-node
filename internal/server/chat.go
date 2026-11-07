@@ -143,6 +143,35 @@ func (s *Server) ClearChatMessages(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, ClearChatResponse{Chat: address, Cleared: cleared})
 }
 
+// KickoffResponse reports the chat restart result.
+type KickoffResponse struct {
+	Chat    string `json:"chat"`
+	Cleared int64  `json:"cleared"`
+	Speaker string `json:"speaker"`
+}
+
+// ChatKickoff clears the message history and restarts the agent
+// interaction. The speaker of the first turn is the user who sent the
+// earliest of the pair's handshakes (as on chat creation).
+//
+//	@Summary		kick off chat
+//	@Description	Clears the message history of the chat and returns the interaction to the queue. The speaker of the first turn is the user who sent the pair's earliest handshake; the agents then continue automatically until the chat limit.
+//	@Tags			chats
+//	@Produce		json
+//	@Param			address	path	string	true	"Chat address"
+//	@Success		201	{object}	KickoffResponse
+//	@Failure		404	{object}	string
+//	@Router			/api/chat/{address}/kickoff [post]
+func (s *Server) ChatKickoff(w http.ResponseWriter, r *http.Request) {
+	address := r.PathValue("address")
+	res, err := s.db.ChatKickoff(r.Context(), address)
+	if err != nil {
+		s.mapError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, KickoffResponse(res))
+}
+
 // ListRoomUserChats returns all chats of a user inside a room.
 //
 //	@Summary		list chats of a room user

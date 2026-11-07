@@ -51,6 +51,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/room/{room}/user/{address}/chat/{chat}/messages", s.ListRoomUserChatMessages)
 	mux.HandleFunc("GET /api/chat/{address}", s.GetChat)
 	mux.HandleFunc("DELETE /api/chat/{address}/message", s.ClearChatMessages)
+	mux.HandleFunc("POST /api/chat/{address}/kickoff", s.ChatKickoff)
 	mux.HandleFunc("GET /api/chat/{address}/message", s.ListChatMessages)
 
 	// Swagger UI.
