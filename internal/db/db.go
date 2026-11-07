@@ -186,18 +186,69 @@ WHERE room = ''`); err != nil {
 
 // rebuildUsersWithLongBio recreates the users table when its bio CHECK
 // constraints still cap the bios at 64 symbols (SQLite cannot alter a
-// constraint in place).
+// constraint in place). It also repairs a half-applied rename left behind by
+// an interrupted older run (users_old present).
 func (d *DB) rebuildUsersWithLongBio(ctx context.Context) error {
-	var sqlText string
+	// Foreign keys must be off while renaming: without this, SQLite rewrites
+	// the FKs of referencing tables (participants, messages) to users_old
+	// and the later DROP fails with constraint errors. legacy_alter_table
+	// keeps the referencing tables pointing at the final "users" name.
+	for _, p := range []string{`PRAGMA foreign_keys=OFF`, `PRAGMA legacy_alter_table=ON`} {
+		if _, err := d.ExecContext(ctx, p); err != nil {
+			return fmt.Errorf("%s: %w", p, err)
+		}
+	}
+	defer func() {
+		_, _ = d.ExecContext(ctx, `PRAGMA legacy_alter_table=OFF`)
+		_, _ = d.ExecContext(ctx, `PRAGMA foreign_keys=ON`)
+	}()
+
+	var (
+		curr, old sql.NullString
+	)
 	if err := d.QueryRowContext(ctx,
-		`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'users'`).Scan(&sqlText); err != nil {
+		`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'users'`).Scan(&curr); err != nil {
 		return fmt.Errorf("sqlite_master users: %w", err)
 	}
-	if strings.Contains(sqlText, "length(public_bio) <= 255") {
+	if err := d.QueryRowContext(ctx,
+		`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'users_old'`).Scan(&old); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("sqlite_master users_old: %w", err)
+	}
+
+	if curr.Valid && strings.Contains(curr.String, "length(public_bio) <= 255") && !old.Valid {
+		// Already at the long-bio schema and no leftover.
 		return nil
 	}
 
-	const rebuild = `
+	if !curr.Valid || old.Valid {
+		// Leftover from an interrupted rename: recreate the long-bio schema
+		// fresh and copy everything back from users_old.
+		if !curr.Valid {
+			if _, err := d.ExecContext(ctx,
+				`CREATE TABLE users (
+		address     TEXT PRIMARY KEY,
+		name        TEXT NOT NULL,
+		room        TEXT NOT NULL REFERENCES rooms(address),
+		public_bio  TEXT NOT NULL DEFAULT '' CHECK (length(public_bio) <= 255),
+		private_bio TEXT NOT NULL DEFAULT '' CHECK (length(private_bio) <= 255),
+		created_at  TEXT NOT NULL,
+		updated_at  TEXT NOT NULL,
+		deleted_at  TEXT
+	)`); err != nil {
+				return fmt.Errorf("create users: %w", err)
+			}
+		}
+		if _, err := d.ExecContext(ctx, `
+INSERT OR REPLACE INTO users (address, name, room, public_bio, private_bio, created_at, updated_at, deleted_at)
+SELECT address, name, room, public_bio, private_bio, created_at, updated_at, deleted_at FROM users_old`); err != nil {
+			return fmt.Errorf("copy users_old back: %w", err)
+		}
+		if _, err := d.ExecContext(ctx, `DROP TABLE users_old`); err != nil {
+			return fmt.Errorf("drop users_old: %w", err)
+		}
+	} else {
+		// Regular upgrade: 64-legacy schema present.
+		const rebuild = `
 ALTER TABLE users RENAME TO users_old;
 
 CREATE TABLE users (
@@ -217,13 +268,25 @@ FROM users_old;
 
 DROP TABLE users_old;
 `
-	// The index comes back automatically with the table name it targets.
-	if _, err := d.ExecContext(ctx, rebuild); err != nil {
-		return fmt.Errorf("rebuild users: %w", err)
+		if _, err := d.ExecContext(ctx, rebuild); err != nil {
+			return fmt.Errorf("rebuild users: %w", err)
+		}
 	}
+
 	if _, err := d.ExecContext(ctx,
 		`CREATE INDEX IF NOT EXISTS idx_users_room ON users(room)`); err != nil {
 		return fmt.Errorf("rebuild users index: %w", err)
+	}
+	if err := d.vacuum(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
+// vacuum compacts the database file after table rebuilds.
+func (d *DB) vacuum(ctx context.Context) error {
+	if _, err := d.ExecContext(ctx, `VACUUM`); err != nil {
+		return fmt.Errorf("vacuum: %w", err)
 	}
 	return nil
 }
