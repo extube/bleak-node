@@ -21,13 +21,15 @@ const maxAddressLen = 64
 // CreateHandshake registers a handshake between two users.
 //
 //	@Summary		create handshake
-//	@Description	Registers a handshake between two existing users with a server-generated tx id. Status must be in {1,2,3,4}; the sender's income must exceed its outcome.
+//	@Description	Registers a handshake between two existing users with a server-generated tx id. Status must be in {1,2,3,4}; the sender's income must exceed its outcome. A directed pair (from, to) is unique: if that handshake already exists nothing is created and the live handshake is returned with 200 instead of 201.
 //	@Tags			handshakes
 //	@Accept			json
 //	@Produce		json
 //	@Param			request	body	CreateHandshakeRequest	true	"Handshake to create"
 //	@Success		201	{object}	model.Handshake
+//	@Success		200	{object}	model.Handshake
 //	@Failure		400	{object}	string
+//	@Failure		403	{object}	string
 //	@Failure		404	{object}	string
 //	@Failure		409	{object}	string
 //	@Router			/api/handshake [post]
@@ -60,11 +62,17 @@ func (s *Server) CreateHandshake(w http.ResponseWriter, r *http.Request) {
 		ToAddress:   req.ToAddress,
 		Status:      req.Status,
 	}
-	if err := s.db.CreateHandshake(r.Context(), &hs); err != nil {
+	created, err := s.db.CreateHandshake(r.Context(), &hs)
+	if err != nil {
 		s.mapError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, hs)
+	code := http.StatusCreated
+	if !created {
+		// Pair already existed: return the live handshake without error.
+		code = http.StatusOK
+	}
+	writeJSON(w, code, hs)
 }
 
 // ListUserHandshakes returns all handshakes of a user.

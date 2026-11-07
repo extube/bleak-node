@@ -20,7 +20,7 @@ const docTemplate = `{
     "paths": {
         "/api/handshake": {
             "post": {
-                "description": "Registers a handshake between two existing users with a server-generated tx id. Status must be in {1,2,3,4}; the sender's income must exceed its outcome.",
+                "description": "Registers a handshake between two existing users with a server-generated tx id. Status must be in {1,2,3,4}; the sender's income must exceed its outcome. A directed pair (from, to) is unique: if that handshake already exists nothing is created and the live handshake is returned with 200 instead of 201.",
                 "consumes": [
                     "application/json"
                 ],
@@ -43,6 +43,12 @@ const docTemplate = `{
                     }
                 ],
                 "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/model.Handshake"
+                        }
+                    },
                     "201": {
                         "description": "Created",
                         "schema": {
@@ -51,6 +57,12 @@ const docTemplate = `{
                     },
                     "400": {
                         "description": "Bad Request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
                         "schema": {
                             "type": "string"
                         }

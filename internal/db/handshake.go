@@ -19,31 +19,63 @@ func IsValidStatus(s int) bool {
 	return ok
 }
 
+// FindHandshake returns the directed handshake from -> to when it already
+// exists (a handshake pair is unique per direction).
+func (d *DB) FindHandshake(ctx context.Context, from, to string) (model.Handshake, bool, error) {
+	row := d.QueryRowContext(ctx,
+		`SELECT tx_id, from_address, to_address, status, value, created_at
+		 FROM handshakes WHERE from_address = ? AND to_address = ?`, from, to)
+	hs, err := scanHandshake(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.Handshake{}, false, nil
+	}
+	if err != nil {
+		return model.Handshake{}, false, err
+	}
+	return hs, true, nil
+}
+
 // CreateHandshake registers a user-to-user handshake with status in [1..4]
-// and a server-generated tx_id. The handshake is only accepted when the
-// sender's balance (income - outcome) is positive; the value is fixed at 1.
-func (d *DB) CreateHandshake(ctx context.Context, hs *model.Handshake) error {
+// and a server-generated tx_id. A handshake pair (from, to) is unique:
+// when it already exists nothing is created and the live handshake is
+// returned without error (also without balance checks). Otherwise the
+// handshake is only accepted when the sender's balance (income - outcome)
+// is positive; the value is fixed at 1.
+//
+// The bool result reports whether a new handshake was created.
+func (d *DB) CreateHandshake(ctx context.Context, hs *model.Handshake) (bool, error) {
 	if _, ok := ValidHandshakeStatuses[hs.Status]; !ok {
-		return errors.Join(ErrInvalid, fmt.Errorf("status %d is not in {1,2,3,4}", hs.Status))
+		return false, errors.Join(ErrInvalid, fmt.Errorf("status %d is not in {1,2,3,4}", hs.Status))
 	}
 
 	for _, addr := range []string{hs.FromAddress, hs.ToAddress} {
 		ok, err := d.UserExists(ctx, addr)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if !ok {
-			return errors.Join(ErrNotFound, fmt.Errorf("user %q not found", addr))
+			return false, errors.Join(ErrNotFound, fmt.Errorf("user %q not found", addr))
 		}
+	}
+
+	// Idempotent: an existing directed pair is returned as-is, no error,
+	// no balance impact.
+	existing, found, err := d.FindHandshake(ctx, hs.FromAddress, hs.ToAddress)
+	if err != nil {
+		return false, err
+	}
+	if found {
+		*hs = existing
+		return false, nil
 	}
 
 	// Income > outcome required to send.
 	balance, err := d.handshakeBalance(ctx, hs.FromAddress)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if balance <= 0 {
-		return errors.Join(ErrBalance, fmt.Errorf(
+		return false, errors.Join(ErrBalance, fmt.Errorf(
 			"user %q balance is %d: income must exceed outcome to send a handshake",
 			hs.FromAddress, balance))
 	}
@@ -60,9 +92,12 @@ func (d *DB) CreateHandshake(ctx context.Context, hs *model.Handshake) error {
 		if isUnique(err) {
 			continue
 		}
-		return err
+		if err != nil {
+			return false, err
+		}
+		return true, nil
 	}
-	return errors.Join(ErrConflict, errors.New("could not generate unique handshake tx_id"))
+	return false, errors.Join(ErrConflict, errors.New("could not generate unique handshake tx_id"))
 }
 
 // createSystemHandshake inserts the welcome handshake from a room to a new
