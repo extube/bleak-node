@@ -43,35 +43,37 @@ LIMIT 1`, a, b)
 
 // ensureChat creates the chat plus its two participants when the pair does
 // not have one yet; idempotent. Runs on the given executor (tx or db).
-func ensureChat(ctx context.Context, q rowQuerier, a, b string) (model.Chat, error) {
-	if c, found, err := findChat(ctx, q, a, b); err != nil || found {
-		return c, err
+// The bool reports whether a new chat was created.
+func ensureChat(ctx context.Context, q rowQuerier, a, b string) (model.Chat, bool, error) {
+	c, found, err := findChat(ctx, q, a, b)
+	if err != nil || found {
+		return c, false, err
 	}
 
-	c := model.Chat{CreatedAt: time.Now().UTC()}
+	c = model.Chat{CreatedAt: time.Now().UTC()}
 	for attempt := 0; attempt < 3; attempt++ {
 		c.Address = newAddress(16)
 		if _, err := q.ExecContext(ctx,
 			`INSERT INTO chats (address, created_at) VALUES (?, ?)`,
 			c.Address, c.CreatedAt.Format(time.RFC3339)); !isUnique(err) {
 			if err != nil {
-				return model.Chat{}, err
+				return model.Chat{}, false, err
 			}
 			break
 		}
 	}
 	if c.Address == "" {
-		return model.Chat{}, errors.Join(ErrConflict, errors.New("could not generate unique chat address"))
+		return model.Chat{}, false, errors.Join(ErrConflict, errors.New("could not generate unique chat address"))
 	}
 
 	// Participants are created automatically with the chat.
 	for _, u := range []string{a, b} {
 		if _, err := q.ExecContext(ctx,
 			`INSERT INTO participants (chat, user) VALUES (?, ?)`, c.Address, u); err != nil && !isUnique(err) {
-			return model.Chat{}, err
+			return model.Chat{}, false, err
 		}
 	}
-	return c, nil
+	return c, true, nil
 }
 
 // bothHandshakeDirections reports whether the handshakes a -> b and b -> a

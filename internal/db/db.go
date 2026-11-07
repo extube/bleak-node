@@ -118,6 +118,22 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 
 CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat);
+
+-- Lightweight queue over SQLite. The agent worker consumes pending rows.
+CREATE TABLE IF NOT EXISTS events (
+	id           INTEGER PRIMARY KEY AUTOINCREMENT,
+	type         TEXT NOT NULL,
+	chat         TEXT NOT NULL REFERENCES chats(address),
+	speaker      TEXT NOT NULL,
+	listener     TEXT NOT NULL,
+	status       TEXT NOT NULL DEFAULT 'pending',
+	attempts     INTEGER NOT NULL DEFAULT 0,
+	error        TEXT NOT NULL DEFAULT '',
+	created_at   TEXT NOT NULL,
+	processed_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_events_status ON events(status, id);
 `
 	if _, err := d.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("migrate: %w", err)

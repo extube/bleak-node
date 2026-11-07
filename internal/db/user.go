@@ -114,6 +114,22 @@ func (d *DB) UserExists(ctx context.Context, address string) (bool, error) {
 	return d.exists(ctx, `SELECT EXISTS (SELECT 1 FROM users WHERE address = ? AND deleted_at IS NULL)`, address)
 }
 
+// UserByAddress returns a user by address regardless of its room (also
+// soft-deleted rows: the agent worker needs the bios even then).
+func (d *DB) UserByAddress(ctx context.Context, address string) (model.User, bool, error) {
+	row := d.QueryRowContext(ctx,
+		`SELECT address, name, room, public_bio, private_bio, created_at, updated_at, deleted_at
+		 FROM users WHERE address = ?`, address)
+	user, err := scanUser(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.User{}, false, nil
+	}
+	if err != nil {
+		return model.User{}, false, err
+	}
+	return user, true, nil
+}
+
 // UpdateUser updates name/bios of a non-deleted user inside the given room.
 func (d *DB) UpdateUser(ctx context.Context, roomAddress, address string, name, publicBio, privateBio *string) (model.User, error) {
 	cur, err := d.GetUser(ctx, roomAddress, address)

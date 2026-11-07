@@ -102,8 +102,18 @@ func (d *DB) CreateHandshake(ctx context.Context, hs *model.Handshake) (bool, er
 		return false, err
 	}
 	if both {
-		if _, err := ensureChat(ctx, tx, hs.FromAddress, hs.ToAddress); err != nil {
+		chat, chatCreated, err := ensureChat(ctx, tx, hs.FromAddress, hs.ToAddress)
+		if err != nil {
 			return false, err
+		}
+		if chatCreated {
+			// Kick off the agent interaction: the speaker goes first is the
+			// user who sent the first of the two handshakes (the other side
+			// of the handshake that completed the pair).
+			if err := enqueueEvent(ctx, tx, model.EventChatInteract,
+				chat.Address, hs.ToAddress, hs.FromAddress); err != nil {
+				return false, err
+			}
 		}
 	}
 
