@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"time"
 
@@ -17,6 +16,8 @@ type Config struct {
 	LLMBaseURL string
 	// LLMModel is the served chat model id, e.g. gemma-4-e2b-agent.
 	LLMModel string
+	// APIKey is optional; required by hosted gateways like OpenRouter.
+	APIKey string
 	// MaxMessages caps the conversation: once a chat has that many messages
 	// the prompts ask for a farewell (greeting + goodbye) and the chain stops.
 	MaxMessages int
@@ -58,7 +59,7 @@ func New(database *db.DB, cfg Config, logger *slog.Logger) *Worker {
 	}
 	return &Worker{
 		db:  database,
-		llm: NewClient(cfg.LLMBaseURL, cfg.LLMModel, cfg.Timeout),
+		llm: NewClient(cfg.LLMBaseURL, cfg.LLMModel, cfg.APIKey, cfg.Timeout),
 		cfg: cfg,
 		log: logger,
 	}
@@ -147,12 +148,16 @@ func (w *Worker) process(ctx context.Context, ev model.Event) error {
 
 	// Is this reply the first message of this agent in the chat?
 	myTurns := 0
-	priorWords := make(map[string]struct{}, len(msgs)) // normalized replies already said
 	for _, m := range msgs {
 		if m.From == ev.Speaker {
 			myTurns++
-			priorWords[normalize(m.Content)] = struct{}{}
 		}
+	}
+	// Normalize replies already said (by ANY of the participants: agents
+	// also mimic each other, which reads as repetition).
+	priorWords := make(map[string]struct{}, len(msgs))
+	for _, m := range msgs {
+		priorWords[normalize(m.Content)] = struct{}{}
 	}
 
 	// Anti-echo: regenerate up to cfg.EchoRetries times when the model
@@ -162,9 +167,9 @@ func (w *Worker) process(ctx context.Context, ev model.Event) error {
 		repeated bool
 	)
 	for attempt := 0; attempt <= w.cfg.EchoRetries; attempt++ {
-		nudge := ""
+		nudge := topicSeed(ev, len(msgs), attempt, overLimit, listener.Name)
 		if attempt > 0 {
-			nudge = fmt.Sprintf("IMPORTANT: your previous reply repeated a line you already said. Answer with something NEW: react to %s's last message with a concrete detail or question from your bios.", listener.Name)
+			nudge += " Your previous reply repeated an earlier line; write something NEW."
 		}
 		prompt := buildPrompt(ev.Chat, speaker, listener, msgs, myTurns, overLimit, nudge)
 		out, err := w.llm.Complete(ctx, prompt)
@@ -176,7 +181,7 @@ func (w *Worker) process(ctx context.Context, ev model.Event) error {
 			return errors.New("llm returned an empty message")
 		}
 		content = candidate
-		if _, dup := priorWords[normalize(candidate)]; dup {
+		if isEcho(normalize(candidate), priorWords) {
 			repeated = true
 			continue
 		}

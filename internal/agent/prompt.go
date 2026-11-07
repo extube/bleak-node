@@ -48,14 +48,29 @@ One short plain-text message.`, listener.Name, listener.Name))
 	}
 }
 
-// transcript renders the most recent messages oldest-first.
+// transcript renders each distinct message at its most recent position,
+// oldest first. De-duplicated lines remove the repetition walls the small
+// models tend to amplify (echo loops).
 func transcript(chat string, speaker, listener model.User, msgs []model.Message) string {
 	if len(msgs) > transcriptLimit {
 		msgs = msgs[len(msgs)-transcriptLimit:]
 	}
+	seen := make(map[string]struct{}, len(msgs))
+	kept := make([]model.Message, 0, len(msgs))
+	for i := len(msgs) - 1; i >= 0; i-- {
+		key := normalize(msgs[i].Content)
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+		kept = append(kept, msgs[i])
+	}
+	for l, r := 0, len(kept)-1; l < r; l, r = l+1, r-1 {
+		kept[l], kept[r] = kept[r], kept[l]
+	}
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Chat %s transcript, oldest first:\n", chat))
-	for _, m := range msgs {
+	b.WriteString(fmt.Sprintf("Chat %s transcript, distinct lines, oldest first:\n", chat))
+	for _, m := range kept {
 		name := fromName(m.From, speaker, listener)
 		fmt.Fprintf(&b, "%s: %s\n", name, m.Content)
 	}
@@ -100,7 +115,91 @@ func normalize(s string) string {
 	return strings.TrimSpace(b.String())
 }
 
-// sanitizeContent cleans the LLM output before saving it as a message.
+// isEcho reports whether the candidate reply repeats one of the agent's
+// earlier lines, either verbatim (after normalization) or overlapping them
+// heavily (Jaccard >= echoSimThreshold).
+func isEcho(candidate string, prior map[string]struct{}) bool {
+	if _, dup := prior[candidate]; dup {
+		return true
+	}
+	cand := strings.Fields(candidate)
+	if len(cand) == 0 {
+		return false
+	}
+	for line := range prior {
+		if jaccard(cand, strings.Fields(line)) >= echoSimThreshold {
+			return true
+		}
+	}
+	return false
+}
+
+// echoSimThreshold is the token overlap above which two lines are considered
+// the same thought re-parroted.
+const echoSimThreshold = 0.75
+
+// jaccard returns the intersection/union ratio of two token sets.
+func jaccard(a, b []string) float64 {
+	setA := make(map[string]struct{}, len(a))
+	for _, t := range a {
+		setA[t] = struct{}{}
+	}
+	inter, union := 0, len(setA)
+	for _, t := range b {
+		if _, ok := setA[t]; ok {
+			inter++
+		} else {
+			union++
+		}
+	}
+	if union == 0 {
+		return 0
+	}
+	return float64(inter) / float64(union)
+}
+
+// topicSeeds are concrete turn directives; small chat models follow them far
+// better than abstract "be creative" warnings.
+var topicSeeds = []string{
+	"Describe one specific detail from your work day.",
+	"Ask the other participant one concrete question about their hobby.",
+	"Tell a short story from your past.",
+	"Compliment the other participant for something specific.",
+	"Ask for advice about a small real-life problem.",
+	"Talk about food or music you love and why.",
+	"Propose to do something together tomorrow.",
+	"Ask about the other participant's dreams and hopes.",
+	"Share one thing you fear and one you look forward to.",
+	"Tell what your favourite place looks like and why you go there.",
+}
+
+// topicSeed picks a deterministic directive for this turn: the same turn of
+// the same chat always gets the same topic, neighbouring turns rotate
+// through the list. The first turn of an agent keeps its hello prompt.
+func topicSeed(ev model.Event, turnNumber, attempt int, overLimit bool, listenerName string) string {
+	_ = listenerName
+	if overLimit {
+		// The farewell prompt already fully specifies the content.
+		return ""
+	}
+	if turnNumber == 0 {
+		// Keep the hello prompt of buildPrompt untouched.
+		return ""
+	}
+	idx := (int(fnv32a(ev.Chat)) + turnNumber*(1+attempt)) % len(topicSeeds)
+	return "This turn must cover: " + topicSeeds[idx]
+}
+
+// fnv32a is a tiny deterministic string hasher (standalone, no imports).
+func fnv32a(s string) uint32 {
+	var h uint32 = 2166136261
+	for i := 0; i < len(s); i++ {
+		h ^= uint32(s[i])
+		h *= 16777619
+	}
+	return h
+}
+
 func sanitizeContent(s string) string {
 	// Drop markdown code fences if the model wrapped its answer.
 	s = strings.TrimSpace(s)
