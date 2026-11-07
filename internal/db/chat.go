@@ -209,6 +209,37 @@ func (d *DB) ListRoomUserChatMessages(ctx context.Context, roomAddress, address,
 	return d.ListChatMessages(ctx, chatAddress)
 }
 
+// DeleteChat removes a chat and everything tied to it: its messages, its
+// participants and its queued events. Not soft-deleted — a fresh chat for
+// the same pair is created again on the next pair handshake.
+func (d *DB) DeleteChat(ctx context.Context, address string) error {
+	_, found, err := d.chatByAddress(ctx, address)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return errors.Join(ErrNotFound, err)
+	}
+
+	tx, err := d.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	for _, stmt := range []string{
+		`DELETE FROM messages WHERE chat = ?`,
+		`DELETE FROM participants WHERE chat = ?`,
+		`DELETE FROM events WHERE chat = ?`,
+		`DELETE FROM chats WHERE address = ?`,
+	} {
+		if _, err := tx.ExecContext(ctx, stmt, address); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 // roomHasUser reports whether a non-deleted user belongs to the room.
 func (d *DB) roomHasUser(ctx context.Context, roomAddress, address string) (bool, error) {
 	return d.exists(ctx,

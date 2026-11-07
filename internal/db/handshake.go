@@ -58,6 +58,22 @@ func (d *DB) CreateHandshake(ctx context.Context, hs *model.Handshake) (bool, er
 	}
 	if found {
 		*hs = existing
+		// Re-init: when the pair's chat was deleted meanwhile, the next
+		// request for the pair starts a fresh chat where the requester
+		// (hs.FromAddress) is the first speaker.
+		chat, chatCreated, err := ensureChat(ctx, tx, hs.FromAddress, hs.ToAddress)
+		if err != nil {
+			return false, err
+		}
+		if chatCreated {
+			if err := enqueueEvent(ctx, tx, model.EventChatInteract,
+				chat.Address, hs.FromAddress, hs.ToAddress); err != nil {
+				return false, err
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			return false, err
+		}
 		return false, nil
 	}
 
