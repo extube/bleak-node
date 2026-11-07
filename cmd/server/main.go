@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -88,11 +89,26 @@ func agentConfig() *agent.Config {
 		return nil
 	}
 	return &agent.Config{
-		LLMBaseURL:  envOr("BLEAK_NODE_LLM_URL", "http://localhost:8000/v1"),
-		LLMModel:    envOr("BLEAK_NODE_LLM_MODEL", "gemma-4-e2b-agent"),
-		APIKey:      envOr("BLEAK_NODE_LLM_API_KEY", envOr("OPENROUTER_API_KEY", "")),
-		MaxMessages: envInt("BLEAK_NODE_CHAT_LIMIT", model.DefaultChatMaxMessages),
+		LLMBaseURL: envOr("BLEAK_NODE_LLM_URL", "http://localhost:8000/v1"),
+		LLMModel:   envOr("BLEAK_NODE_LLM_MODEL", "gemma-4-e2b-agent"),
+		APIKey:     envOr("BLEAK_NODE_LLM_API_KEY", envOr("OPENROUTER_API_KEY", "")),
+		// Thinking channel is disabled unless BLEAK_NODE_LLM_THINKING=1:
+		// the local qwen model otherwise buries the answer in reasoning_content.
+		DisableThinking: !envBool("BLEAK_NODE_LLM_THINKING", false),
+		MaxMessages:     envInt("BLEAK_NODE_CHAT_LIMIT", model.DefaultChatMaxMessages),
 	}
+}
+
+// envBool reports whether the env var is truthy; unset keeps the fallback.
+func envBool(key string, fallback bool) bool {
+	v := os.Getenv(key)
+	switch strings.ToLower(v) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	}
+	return fallback
 }
 
 func envInt(key string, fallback int) int {

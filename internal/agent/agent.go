@@ -18,6 +18,9 @@ type Config struct {
 	LLMModel string
 	// APIKey is optional; required by hosted gateways like OpenRouter.
 	APIKey string
+	// DisableThinking silences the reasoning channel of Qwen-style thinking
+	// models (chat_template_kwargs enable_thinking=false).
+	DisableThinking bool
 	// MaxMessages caps the conversation: once a chat has that many messages
 	// the prompts ask for a farewell (greeting + goodbye) and the chain stops.
 	MaxMessages int
@@ -59,7 +62,7 @@ func New(database *db.DB, cfg Config, logger *slog.Logger) *Worker {
 	}
 	return &Worker{
 		db:  database,
-		llm: NewClient(cfg.LLMBaseURL, cfg.LLMModel, cfg.APIKey, cfg.Timeout),
+		llm: NewClient(cfg.LLMBaseURL, cfg.LLMModel, cfg.APIKey, cfg.Timeout, cfg.DisableThinking),
 		cfg: cfg,
 		log: logger,
 	}
