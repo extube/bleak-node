@@ -641,6 +641,103 @@
                 }
             }
         },
+        "/api/room/{room}/user/{address}/chat": {
+            "get": {
+                "description": "Returns every chat the user participates in. The user must live in the given room.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "chats"
+                ],
+                "summary": "list chats of a room user",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Room address",
+                        "name": "room",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "User address",
+                        "name": "address",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/server.ChatResponse"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/room/{room}/user/{address}/chat/{chat}/messages": {
+            "get": {
+                "description": "Returns every message of the chat, oldest first. The user must live in the given room and participate in the chat.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "messages"
+                ],
+                "summary": "list messages of a room user chat",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Room address",
+                        "name": "room",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "User address",
+                        "name": "address",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Chat address",
+                        "name": "chat",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/model.Message"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/api/user/{address}/chat": {
             "get": {
                 "description": "Returns every chat the user participates in, newest first.",

@@ -47,6 +47,8 @@ func (s *Server) Handler() http.Handler {
 	// Chats & messages.
 	mux.HandleFunc("POST /api/message", s.SendMessage)
 	mux.HandleFunc("GET /api/user/{address}/chat", s.ListUserChats)
+	mux.HandleFunc("GET /api/room/{room}/user/{address}/chat", s.ListRoomUserChats)
+	mux.HandleFunc("GET /api/room/{room}/user/{address}/chat/{chat}/messages", s.ListRoomUserChatMessages)
 	mux.HandleFunc("GET /api/chat/{address}", s.GetChat)
 	mux.HandleFunc("GET /api/chat/{address}/message", s.ListChatMessages)
 
