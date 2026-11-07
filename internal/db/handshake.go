@@ -20,7 +20,8 @@ func IsValidStatus(s int) bool {
 }
 
 // CreateHandshake registers a user-to-user handshake with status in [1..4]
-// and a server-generated tx_id. A handshake pair (from, to) is unique:
+// and a server-generated tx_id. Both users must live in the same room; the
+// handshake records that room. A handshake pair (from, to) is unique:
 // when it already exists nothing is created and the live handshake is
 // returned without error (also without balance checks). Otherwise the
 // handshake is only accepted when the sender's balance (income - outcome)
@@ -32,15 +33,26 @@ func (d *DB) CreateHandshake(ctx context.Context, hs *model.Handshake) (bool, er
 		return false, errors.Join(ErrInvalid, fmt.Errorf("status %d is not in {1,2,3,4}", hs.Status))
 	}
 
-	for _, addr := range []string{hs.FromAddress, hs.ToAddress} {
-		ok, err := d.UserExists(ctx, addr)
+	// Both users must exist and must interact within one room.
+	var (
+		users [2]model.User
+	)
+	for i, addr := range []string{hs.FromAddress, hs.ToAddress} {
+		u, ok, err := d.UserByAddress(ctx, addr)
 		if err != nil {
 			return false, err
 		}
-		if !ok {
+		if !ok || u.DeletedAt != nil {
 			return false, errors.Join(ErrNotFound, fmt.Errorf("user %q not found", addr))
 		}
+		users[i] = u
 	}
+	if users[0].Room != users[1].Room {
+		return false, errors.Join(ErrInvalid, fmt.Errorf(
+			"users %q and %q are not in the same room: handshakes only link users of one room",
+			users[0].Address, users[1].Address))
+	}
+	hs.Room = users[0].Room
 
 	// Everything below runs in one transaction: the handshake insert and the
 	// automatic chat creation are atomic (single-writer pool makes the tx safe).
@@ -61,7 +73,7 @@ func (d *DB) CreateHandshake(ctx context.Context, hs *model.Handshake) (bool, er
 		// Re-init: when the pair's chat was deleted meanwhile, the next
 		// request for the pair starts a fresh chat where the requester
 		// (hs.FromAddress) is the first speaker.
-		chat, chatCreated, err := ensureChat(ctx, tx, hs.FromAddress, hs.ToAddress)
+		chat, chatCreated, err := ensureChat(ctx, tx, hs.Room, hs.FromAddress, hs.ToAddress)
 		if err != nil {
 			return false, err
 		}
@@ -77,8 +89,8 @@ func (d *DB) CreateHandshake(ctx context.Context, hs *model.Handshake) (bool, er
 		return false, nil
 	}
 
-	// Income > outcome required to send.
-	balance, err := handshakeBalanceOn(ctx, tx, hs.FromAddress)
+	// Income > outcome required to send (scoped to the interaction room).
+	balance, err := handshakeBalanceOn(ctx, tx, hs.FromAddress, hs.Room)
 	if err != nil {
 		return false, err
 	}
@@ -96,8 +108,9 @@ func (d *DB) CreateHandshake(ctx context.Context, hs *model.Handshake) (bool, er
 	for attempt := 0; attempt < 3; attempt++ {
 		hs.TxID = newTxID()
 		_, err = tx.ExecContext(ctx,
-			`INSERT INTO handshakes (tx_id, from_address, to_address, status, value, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-			hs.TxID, hs.FromAddress, hs.ToAddress, hs.Status, hs.Value, hs.CreatedAt.Format(time.RFC3339))
+			`INSERT INTO handshakes (tx_id, from_address, to_address, room, status, value, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			hs.TxID, hs.FromAddress, hs.ToAddress, hs.Room, hs.Status, hs.Value, hs.CreatedAt.Format(time.RFC3339))
 		if isUnique(err) {
 			continue
 		}
@@ -118,7 +131,7 @@ func (d *DB) CreateHandshake(ctx context.Context, hs *model.Handshake) (bool, er
 		return false, err
 	}
 	if both {
-		chat, chatCreated, err := ensureChat(ctx, tx, hs.FromAddress, hs.ToAddress)
+		chat, chatCreated, err := ensureChat(ctx, tx, hs.Room, hs.FromAddress, hs.ToAddress)
 		if err != nil {
 			return false, err
 		}
@@ -142,7 +155,7 @@ func (d *DB) CreateHandshake(ctx context.Context, hs *model.Handshake) (bool, er
 // findHandshakeOn runs the pair lookup on the given executor.
 func findHandshakeOn(ctx context.Context, q rowQuerier, from, to string) (model.Handshake, bool, error) {
 	row := q.QueryRowContext(ctx,
-		`SELECT tx_id, from_address, to_address, status, value, created_at
+		`SELECT tx_id, from_address, to_address, room, status, value, created_at
 		 FROM handshakes WHERE from_address = ? AND to_address = ?`, from, to)
 	hs, err := scanHandshake(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -154,14 +167,15 @@ func findHandshakeOn(ctx context.Context, q rowQuerier, from, to string) (model.
 	return hs, true, nil
 }
 
-// handshakeBalanceOn computes income - outcome on the given executor.
-func handshakeBalanceOn(ctx context.Context, q rowQuerier, address string) (int64, error) {
+// handshakeBalanceOn computes income - outcome within one room on the given
+// executor.
+func handshakeBalanceOn(ctx context.Context, q rowQuerier, address, room string) (int64, error) {
 	const q2 = `
 SELECT
-	(SELECT COALESCE(SUM(value), 0) FROM handshakes WHERE to_address = ?) -
-	(SELECT COALESCE(SUM(value), 0) FROM handshakes WHERE from_address = ?)`
+	(SELECT COALESCE(SUM(value), 0) FROM handshakes WHERE to_address = ? AND room = ?) -
+	(SELECT COALESCE(SUM(value), 0) FROM handshakes WHERE from_address = ? AND room = ?)`
 	var balance int64
-	if err := q.QueryRowContext(ctx, q2, address, address).Scan(&balance); err != nil {
+	if err := q.QueryRowContext(ctx, q2, address, room, address, room).Scan(&balance); err != nil {
 		return 0, err
 	}
 	return balance, nil
@@ -174,6 +188,7 @@ func createSystemHandshake(ctx context.Context, q execContext, fromRoom, toUser 
 	hs := model.Handshake{
 		FromAddress: fromRoom,
 		ToAddress:   toUser,
+		Room:        fromRoom,
 		Status:      model.DefaultStatus,
 		Value:       model.FirstHandshakeValue,
 		CreatedAt:   time.Now().UTC(),
@@ -181,8 +196,9 @@ func createSystemHandshake(ctx context.Context, q execContext, fromRoom, toUser 
 	for attempt := 0; attempt < 3; attempt++ {
 		hs.TxID = newTxID()
 		_, err := q.ExecContext(ctx,
-			`INSERT INTO handshakes (tx_id, from_address, to_address, status, value, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-			hs.TxID, hs.FromAddress, hs.ToAddress, hs.Status, hs.Value, hs.CreatedAt.Format(time.RFC3339))
+			`INSERT INTO handshakes (tx_id, from_address, to_address, room, status, value, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			hs.TxID, hs.FromAddress, hs.ToAddress, hs.Room, hs.Status, hs.Value, hs.CreatedAt.Format(time.RFC3339))
 		if isUnique(err) {
 			continue
 		}
@@ -195,7 +211,7 @@ func createSystemHandshake(ctx context.Context, q execContext, fromRoom, toUser 
 // the receiver, newest first.
 func (d *DB) ListUserHandshakes(ctx context.Context, address string) ([]model.Handshake, error) {
 	rows, err := d.QueryContext(ctx,
-		`SELECT tx_id, from_address, to_address, status, value, created_at FROM handshakes
+		`SELECT tx_id, from_address, to_address, room, status, value, created_at FROM handshakes
 		 WHERE from_address = ? OR to_address = ?
 		 ORDER BY created_at DESC, tx_id ASC`, address, address)
 	if err != nil {
@@ -224,7 +240,7 @@ func scanHandshake(s scanner) (model.Handshake, error) {
 		hs        model.Handshake
 		createdAt string
 	)
-	if err := s.Scan(&hs.TxID, &hs.FromAddress, &hs.ToAddress, &hs.Status, &hs.Value, &createdAt); err != nil {
+	if err := s.Scan(&hs.TxID, &hs.FromAddress, &hs.ToAddress, &hs.Room, &hs.Status, &hs.Value, &createdAt); err != nil {
 		return model.Handshake{}, err
 	}
 	hs.CreatedAt = parseTS(createdAt)

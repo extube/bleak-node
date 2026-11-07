@@ -25,21 +25,24 @@ type User struct {
 	DeletedAt  *time.Time `json:"deleted_at"`
 }
 
-// Handshake is a directed, valued interaction between two parties
-// (usually user -> user; the system creates the first handshake room -> user).
+// Handshake is a directed, valued interaction between two parties within the
+// same room (the system creates the first handshake room -> user).
 type Handshake struct {
 	TxID        string    `json:"tx_id" example:"0xtx42"`
 	FromAddress string    `json:"from_address" example:"0xuser123"`
 	ToAddress   string    `json:"to_address" example:"0xuser456"`
+	Room        string    `json:"room" example:"0xroom123"`
 	Status      int       `json:"status" example:"1"`
 	Value       int       `json:"value" example:"1"`
 	CreatedAt   time.Time `json:"created_at"`
 }
 
 // Chat links two users who share messages. Created automatically once
-// handshakes exist in both directions (A -> B and B -> A).
+// handshakes exist in both directions (A -> B and B -> A). Chats live in
+// the same room as their participants.
 type Chat struct {
 	Address   string    `json:"address" example:"0xchat123"`
+	Room      string    `json:"room" example:"0xroom123"`
 	CreatedAt time.Time `json:"created_at"`
 }
 

@@ -89,14 +89,17 @@ CREATE TABLE IF NOT EXISTS handshakes (
 	tx_id        TEXT PRIMARY KEY,
 	from_address TEXT NOT NULL,
 	to_address   TEXT NOT NULL,
+	room         TEXT NOT NULL DEFAULT '',
 	status       INTEGER NOT NULL CHECK (status IN (1, 2, 3, 4)),
 	value        INTEGER NOT NULL CHECK (value > 0),
 	created_at   TEXT NOT NULL
 );
 
 -- Chats are created automatically once both handshake directions exist.
+-- They always live in the same room as their participants.
 CREATE TABLE IF NOT EXISTS chats (
 	address    TEXT PRIMARY KEY,
+	room       TEXT NOT NULL DEFAULT '',
 	created_at TEXT NOT NULL
 );
 
@@ -148,6 +151,30 @@ CREATE INDEX IF NOT EXISTS idx_events_status ON events(status, id);
 	if err := d.ensureColumn(ctx, "handshakes", "value", "INTEGER NOT NULL DEFAULT 1"); err != nil {
 		return err
 	}
+	// Room-scoping: users interact only inside one room, so handshakes and
+	// chats are tied to it. Older rows get the room backfilled from users.
+	if err := d.ensureColumn(ctx, "handshakes", "room", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := d.ensureColumn(ctx, "chats", "room", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if _, err := d.ExecContext(ctx, `
+UPDATE handshakes
+SET room = COALESCE(
+	(SELECT u.room FROM users u WHERE u.address = handshakes.to_address),
+	(SELECT u.room FROM users u WHERE u.address = handshakes.from_address), '')
+WHERE room = ''`); err != nil {
+		return fmt.Errorf("backfill handshake rooms: %w", err)
+	}
+	if _, err := d.ExecContext(ctx, `
+UPDATE chats
+SET room = COALESCE(
+	(SELECT u.room FROM users u WHERE u.address = (
+		SELECT p.user FROM participants p WHERE p.chat = chats.address LIMIT 1)), '')
+WHERE room = ''`); err != nil {
+		return fmt.Errorf("backfill chat rooms: %w", err)
+	}
 	// Older handshakes tables had FOREIGN KEYS to users; rooms now act as
 	// senders of the welcome handshake, so the table is rebuilt without them.
 	return d.rebuildHandshakesWithoutFK(ctx)
@@ -179,6 +206,7 @@ CREATE TABLE handshakes (
 	tx_id        TEXT PRIMARY KEY,
 	from_address TEXT NOT NULL,
 	to_address   TEXT NOT NULL,
+	room         TEXT NOT NULL DEFAULT '',
 	status       INTEGER NOT NULL CHECK (status IN (1, 2, 3, 4)),
 	value        INTEGER NOT NULL CHECK (value > 0),
 	created_at   TEXT NOT NULL
