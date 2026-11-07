@@ -126,7 +126,7 @@ const docTemplate = `{
         },
         "/api/handshake": {
             "post": {
-                "description": "Registers a handshake between two existing users with a server-generated tx id. Status must be in {1,2,3,4}; the sender's income must exceed its outcome. A directed pair (from, to) is unique: if that handshake already exists nothing is created and the live handshake is returned with 200 instead of 201.",
+                "description": "Registers a handshake between two existing users with a server-generated tx id. Both users must live in the same room (the handshake is tied to it). Status must be in {1,2,3,4}; the sender's room-scoped income must exceed its outcome. A directed pair (from, to) is unique: if that handshake already exists nothing is created and the live handshake is returned with 200 instead of 201. A repeat request for a pair without a live chat (deleted) re-creates the chat.",
                 "consumes": [
                     "application/json"
                 ],
@@ -822,6 +822,10 @@ const docTemplate = `{
                     "type": "string",
                     "example": "0xuser123"
                 },
+                "room": {
+                    "type": "string",
+                    "example": "0xroom123"
+                },
                 "status": {
                     "type": "integer",
                     "example": 1
@@ -960,6 +964,10 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/model.Participant"
                     }
+                },
+                "room": {
+                    "type": "string",
+                    "example": "0xroom123"
                 }
             }
         },

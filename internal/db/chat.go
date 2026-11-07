@@ -45,18 +45,18 @@ LIMIT 1`, a, b)
 // ensureChat creates the chat plus its two participants when the pair does
 // not have one yet; idempotent. Runs on the given executor (tx or db).
 // The bool reports whether a new chat was created.
-func ensureChat(ctx context.Context, q rowQuerier, a, b string) (model.Chat, bool, error) {
+func ensureChat(ctx context.Context, q rowQuerier, room, a, b string) (model.Chat, bool, error) {
 	c, found, err := findChat(ctx, q, a, b)
 	if err != nil || found {
 		return c, false, err
 	}
 
-	c = model.Chat{CreatedAt: time.Now().UTC()}
+	c = model.Chat{Room: room, CreatedAt: time.Now().UTC()}
 	for attempt := 0; attempt < 3; attempt++ {
 		c.Address = newAddress(16)
 		if _, err := q.ExecContext(ctx,
-			`INSERT INTO chats (address, created_at) VALUES (?, ?)`,
-			c.Address, c.CreatedAt.Format(time.RFC3339)); !isUnique(err) {
+			`INSERT INTO chats (address, room, created_at) VALUES (?, ?, ?)`,
+			c.Address, c.Room, c.CreatedAt.Format(time.RFC3339)); !isUnique(err) {
 			if err != nil {
 				return model.Chat{}, false, err
 			}
@@ -105,12 +105,12 @@ func (d *DB) GetChat(ctx context.Context, address string) (model.Chat, []model.P
 
 func (d *DB) chatByAddress(ctx context.Context, address string) (model.Chat, bool, error) {
 	row := d.QueryRowContext(ctx,
-		`SELECT address, created_at FROM chats WHERE address = ?`, address)
+		`SELECT address, room, created_at FROM chats WHERE address = ?`, address)
 	var (
 		c         model.Chat
 		createdAt string
 	)
-	if err := row.Scan(&c.Address, &createdAt); err != nil {
+	if err := row.Scan(&c.Address, &c.Room, &createdAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return model.Chat{}, false, nil
 		}
@@ -143,7 +143,7 @@ func (d *DB) ChatParticipants(ctx context.Context, chatAddress string) ([]model.
 // ListUserChats returns all chats the user participates in, newest first.
 func (d *DB) ListUserChats(ctx context.Context, user string) ([]model.Chat, error) {
 	rows, err := d.QueryContext(ctx, `
-SELECT c.address, c.created_at
+SELECT c.address, c.room, c.created_at
 FROM chats c
 JOIN participants p ON p.chat = c.address
 WHERE p.user = ?
@@ -159,7 +159,7 @@ ORDER BY c.created_at DESC, c.address ASC`, user)
 			c         model.Chat
 			createdAt string
 		)
-		if err := rows.Scan(&c.Address, &createdAt); err != nil {
+		if err := rows.Scan(&c.Address, &c.Room, &createdAt); err != nil {
 			return nil, err
 		}
 		c.CreatedAt = parseTS(createdAt)
