@@ -1,0 +1,17 @@
+# Binaries
+/bleak-node
+/cmd/server/bleak-node
+bin/
+
+# SQLite databases
+*.db
+*.db-shm
+*.db-wal
+
+# Go workspace/test artifacts
+*.out
+coverage.*
+
+# IDE
+.idea/
+.vscode/

@@ -1,0 +1,158 @@
+package server
+
+import (
+	"net/http"
+	"unicode/utf8"
+
+	"github.com/extube/bleak-node/internal/model"
+)
+
+// CreateRoomRequest is the body for POST /api/room.
+type CreateRoomRequest struct {
+	Address     string `json:"address"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+// UpdateRoomRequest is the body for PUT /api/room/{address}.
+type UpdateRoomRequest struct {
+	Name        *string `json:"name"`
+	Description *string `json:"description"`
+}
+
+const (
+	maxRoomNameLen = 32
+	maxRoomDescLen = 120
+)
+
+// CreateRoom creates a new room.
+//
+//	@Summary		create room
+//	@Description	Creates a room with a unique address.
+//	@Tags			rooms
+//	@Accept			json
+//	@Produce		json
+//	@Param			request	body	CreateRoomRequest	true	"Room to create"
+//	@Success		201	{object}	model.Room
+//	@Failure		400	{object}	string
+//	@Failure		409	{object}	string
+//	@Router			/api/room [post]
+func (s *Server) CreateRoom(w http.ResponseWriter, r *http.Request) {
+	var req CreateRoomRequest
+	if err := decodeJSON(r, &req); err != nil {
+		respond(w, http.StatusBadRequest, message(err))
+		return
+	}
+
+	if req.Address == "" {
+		respond(w, http.StatusBadRequest, "address is required")
+		return
+	}
+	if n := utf8.RuneCountInString(req.Name); req.Name == "" || n > maxRoomNameLen {
+		respond(w, http.StatusBadRequest, "name is required and must be at most 32 symbols")
+		return
+	}
+	if n := utf8.RuneCountInString(req.Description); n > maxRoomDescLen {
+		respond(w, http.StatusBadRequest, "description must be at most 120 symbols")
+		return
+	}
+
+	room := model.Room{Address: req.Address, Name: req.Name, Description: req.Description}
+	if err := s.db.CreateRoom(r.Context(), &room); err != nil {
+		s.mapError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, room)
+}
+
+// ListRooms lists all rooms.
+//
+//	@Summary		list rooms
+//	@Description	Returns all non-deleted rooms.
+//	@Tags			rooms
+//	@Produce		json
+//	@Success		200	{array}	model.Room
+//	@Router			/api/room [get]
+func (s *Server) ListRooms(w http.ResponseWriter, r *http.Request) {
+	rooms, err := s.db.ListRooms(r.Context())
+	if err != nil {
+		s.mapError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rooms)
+}
+
+// GetRoom returns one room.
+//
+//	@Summary		get room
+//	@Description	Returns a non-deleted room by its address.
+//	@Tags			rooms
+//	@Produce		json
+//	@Param			address	path	string	true	"Room address"
+//	@Success		200	{object}	model.Room
+//	@Failure		404	{object}	string
+//	@Router			/api/room/{address} [get]
+func (s *Server) GetRoom(w http.ResponseWriter, r *http.Request) {
+	room, err := s.db.GetRoom(r.Context(), r.PathValue("address"))
+	if err != nil {
+		s.mapError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, room)
+}
+
+// UpdateRoom partially updates a room.
+//
+//	@Summary		update room
+//	@Description	Updates name and/or description of a room. Omitted fields keep their value.
+//	@Tags			rooms
+//	@Accept			json
+//	@Produce		json
+//	@Param			address	path	string				true	"Room address"
+//	@Param			request	body	UpdateRoomRequest	true	"Fields to update"
+//	@Success		200	{object}	model.Room
+//	@Failure		400	{object}	string
+//	@Failure		404	{object}	string
+//	@Router			/api/room/{address} [put]
+func (s *Server) UpdateRoom(w http.ResponseWriter, r *http.Request) {
+	var req UpdateRoomRequest
+	if err := decodeJSON(r, &req); err != nil {
+		respond(w, http.StatusBadRequest, message(err))
+		return
+	}
+	if req.Name != nil {
+		if n := utf8.RuneCountInString(*req.Name); *req.Name == "" || n > maxRoomNameLen {
+			respond(w, http.StatusBadRequest, "name must be non-empty and at most 32 symbols")
+			return
+		}
+	}
+	if req.Description != nil && utf8.RuneCountInString(*req.Description) > maxRoomDescLen {
+		respond(w, http.StatusBadRequest, "description must be at most 120 symbols")
+		return
+	}
+
+	room, err := s.db.UpdateRoom(r.Context(), r.PathValue("address"), req.Name, req.Description)
+	if err != nil {
+		s.mapError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, room)
+}
+
+// DeleteRoom soft-deletes a room.
+//
+//	@Summary		delete room
+//	@Description	Soft-deletes a room together with its linked users.
+//	@Tags			rooms
+//	@Param			address	path	string	true	"Room address"
+//	@Success		200	{object}	model.Room
+//	@Failure		404	{object}	string
+//	@Router			/api/room/{address} [delete]
+func (s *Server) DeleteRoom(w http.ResponseWriter, r *http.Request) {
+	room, err := s.db.DeleteRoom(r.Context(), r.PathValue("address"))
+	if err != nil {
+		s.mapError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, room)
+}

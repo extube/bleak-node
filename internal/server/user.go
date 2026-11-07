@@ -1,0 +1,174 @@
+package server
+
+import (
+	"net/http"
+	"unicode/utf8"
+
+	"github.com/extube/bleak-node/internal/model"
+)
+
+// CreateUserRequest is the body for POST /api/room/{room}/user.
+type CreateUserRequest struct {
+	Address    string `json:"address"`
+	Name       string `json:"name"`
+	PublicBio  string `json:"public_bio"`
+	PrivateBio string `json:"private_bio"`
+}
+
+// UpdateUserRequest is the body for PUT /api/room/{room}/user/{address}.
+type UpdateUserRequest struct {
+	Name       *string `json:"name"`
+	PublicBio  *string `json:"public_bio"`
+	PrivateBio *string `json:"private_bio"`
+}
+
+const maxUserBioLen = 64
+
+// CreateUser adds a user to a room.
+//
+//	@Summary		create user in room
+//	@Description	Creates a user linked to the room. The room must exist and not be deleted.
+//	@Tags			users
+//	@Accept			json
+//	@Produce		json
+//	@Param			room	path	string				true	"Room address"
+//	@Param			request	body	CreateUserRequest	true	"User to create"
+//	@Success		201	{object}	model.User
+//	@Failure		400	{object}	string
+//	@Failure		404	{object}	string
+//	@Failure		409	{object}	string
+//	@Router			/api/room/{room}/user [post]
+func (s *Server) CreateUser(w http.ResponseWriter, r *http.Request) {
+	var req CreateUserRequest
+	if err := decodeJSON(r, &req); err != nil {
+		respond(w, http.StatusBadRequest, message(err))
+		return
+	}
+	if req.Address == "" {
+		respond(w, http.StatusBadRequest, "address is required")
+		return
+	}
+	if req.Name == "" {
+		respond(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	if n := utf8.RuneCountInString(req.PublicBio); n > maxUserBioLen {
+		respond(w, http.StatusBadRequest, "public_bio must be at most 64 symbols")
+		return
+	}
+	if n := utf8.RuneCountInString(req.PrivateBio); n > maxUserBioLen {
+		respond(w, http.StatusBadRequest, "private_bio must be at most 64 symbols")
+		return
+	}
+
+	user := model.User{
+		Address:    req.Address,
+		Name:       req.Name,
+		PublicBio:  req.PublicBio,
+		PrivateBio: req.PrivateBio,
+	}
+	if err := s.db.CreateUser(r.Context(), r.PathValue("room"), &user); err != nil {
+		s.mapError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, user)
+}
+
+// ListRoomUsers lists users of a room.
+//
+//	@Summary		list users of a room
+//	@Description	Returns all non-deleted users linked to the room.
+//	@Tags			users
+//	@Produce		json
+//	@Param			room	path	string	true	"Room address"
+//	@Success		200	{array}	model.User
+//	@Router			/api/room/{room}/user [get]
+func (s *Server) ListRoomUsers(w http.ResponseWriter, r *http.Request) {
+	users, err := s.db.ListRoomUsers(r.Context(), r.PathValue("room"))
+	if err != nil {
+		s.mapError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, users)
+}
+
+// GetUser returns a single user of a room.
+//
+//	@Summary		get user
+//	@Description	Returns a non-deleted user linked to the room.
+//	@Tags			users
+//	@Produce		json
+//	@Param			room		path	string	true	"Room address"
+//	@Param			address		path	string	true	"User address"
+//	@Success		200	{object}	model.User
+//	@Failure		404	{object}	string
+//	@Router			/api/room/{room}/user/{address} [get]
+func (s *Server) GetUser(w http.ResponseWriter, r *http.Request) {
+	user, err := s.db.GetUser(r.Context(), r.PathValue("room"), r.PathValue("address"))
+	if err != nil {
+		s.mapError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, user)
+}
+
+// UpdateUser partially updates a user.
+//
+//	@Summary		update user
+//	@Description	Updates name and/or bios of a user. Omitted fields keep their value.
+//	@Tags			users
+//	@Accept			json
+//	@Produce		json
+//	@Param			room		path	string				true	"Room address"
+//	@Param			address		path	string				true	"User address"
+//	@Param			request		body	UpdateUserRequest	true	"Fields to update"
+//	@Success		200	{object}	model.User
+//	@Failure		400	{object}	string
+//	@Failure		404	{object}	string
+//	@Router			/api/room/{room}/user/{address} [put]
+func (s *Server) UpdateUser(w http.ResponseWriter, r *http.Request) {
+	var req UpdateUserRequest
+	if err := decodeJSON(r, &req); err != nil {
+		respond(w, http.StatusBadRequest, message(err))
+		return
+	}
+	if req.Name != nil && *req.Name == "" {
+		respond(w, http.StatusBadRequest, "name must be non-empty")
+		return
+	}
+	if req.PublicBio != nil && utf8.RuneCountInString(*req.PublicBio) > maxUserBioLen {
+		respond(w, http.StatusBadRequest, "public_bio must be at most 64 symbols")
+		return
+	}
+	if req.PrivateBio != nil && utf8.RuneCountInString(*req.PrivateBio) > maxUserBioLen {
+		respond(w, http.StatusBadRequest, "private_bio must be at most 64 symbols")
+		return
+	}
+
+	user, err := s.db.UpdateUser(r.Context(), r.PathValue("room"), r.PathValue("address"),
+		req.Name, req.PublicBio, req.PrivateBio)
+	if err != nil {
+		s.mapError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, user)
+}
+
+// DeleteUser soft-deletes a user.
+//
+//	@Summary		delete user
+//	@Description	Soft-deletes a user of the room.
+//	@Tags			users
+//	@Param			room	path	string	true	"Room address"
+//	@Param			address	path	string	true	"User address"
+//	@Success		200	{object}	model.User
+//	@Failure		404	{object}	string
+//	@Router			/api/room/{room}/user/{address} [delete]
+func (s *Server) DeleteUser(w http.ResponseWriter, r *http.Request) {
+	user, err := s.db.DeleteUser(r.Context(), r.PathValue("room"), r.PathValue("address"))
+	if err != nil {
+		s.mapError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, user)
+}
