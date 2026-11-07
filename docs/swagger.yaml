@@ -16,6 +16,9 @@ definitions:
       tx_id:
         example: 0xtx42
         type: string
+      value:
+        example: 1
+        type: integer
     type: object
   model.Room:
     properties:
@@ -29,6 +32,9 @@ definitions:
       description:
         example: A room for bleak meetings
         type: string
+      max_user:
+        example: 100
+        type: integer
       name:
         example: Meta Room
         type: string
@@ -114,7 +120,7 @@ paths:
       consumes:
       - application/json
       description: Registers a handshake between two existing users with a server-generated
-        tx id. Status must be in {0,1,2,3,4}.
+        tx id. Status must be in {1,2,3,4}; the sender's income must exceed its outcome.
       parameters:
       - description: Handshake to create
         in: body

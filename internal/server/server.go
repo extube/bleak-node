@@ -100,6 +100,8 @@ func (s *Server) mapError(w http.ResponseWriter, err error) {
 		respond(w, http.StatusNotFound, message(err))
 	case errors.Is(err, db.ErrConflict):
 		respond(w, http.StatusConflict, message(err))
+	case errors.Is(err, db.ErrBalance):
+		respond(w, http.StatusForbidden, message(err))
 	default:
 		respond(w, http.StatusInternalServerError, err.Error())
 	}

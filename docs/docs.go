@@ -20,7 +20,7 @@ const docTemplate = `{
     "paths": {
         "/api/handshake": {
             "post": {
-                "description": "Registers a handshake between two existing users with a server-generated tx id. Status must be in {0,1,2,3,4}.",
+                "description": "Registers a handshake between two existing users with a server-generated tx id. Status must be in {1,2,3,4}; the sender's income must exceed its outcome.",
                 "consumes": [
                     "application/json"
                 ],
@@ -534,6 +534,10 @@ const docTemplate = `{
                 "tx_id": {
                     "type": "string",
                     "example": "0xtx42"
+                },
+                "value": {
+                    "type": "integer",
+                    "example": 1
                 }
             }
         },
@@ -553,6 +557,10 @@ const docTemplate = `{
                 "description": {
                     "type": "string",
                     "example": "A room for bleak meetings"
+                },
+                "max_user": {
+                    "type": "integer",
+                    "example": 100
                 },
                 "name": {
                     "type": "string",

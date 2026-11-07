@@ -21,6 +21,8 @@ var (
 	ErrNotFound = errors.New("not found")
 	ErrConflict = errors.New("conflict")
 	ErrInvalid  = errors.New("invalid")
+	// ErrBalance signals the sender has no positive spendable balance.
+	ErrBalance = errors.New("insufficient balance")
 )
 
 // DB wraps *sql.DB with bleak-node specific helpers.
@@ -62,6 +64,7 @@ CREATE TABLE IF NOT EXISTS rooms (
 	address     TEXT PRIMARY KEY,
 	name        TEXT NOT NULL CHECK (length(name) <= 32),
 	description TEXT NOT NULL DEFAULT '' CHECK (length(description) <= 120),
+	max_user    INTEGER NOT NULL DEFAULT 100 CHECK (max_user > 0),
 	created_at  TEXT NOT NULL,
 	updated_at  TEXT NOT NULL,
 	deleted_at  TEXT
@@ -80,19 +83,87 @@ CREATE TABLE IF NOT EXISTS users (
 
 CREATE INDEX IF NOT EXISTS idx_users_room ON users(room);
 
+-- from_address may be a room (system "welcome" handshake), so foreign keys
+-- are intentionally not declared here; the application validates addresses.
 CREATE TABLE IF NOT EXISTS handshakes (
 	tx_id        TEXT PRIMARY KEY,
-	from_address TEXT NOT NULL REFERENCES users(address),
-	to_address   TEXT NOT NULL REFERENCES users(address),
-	status       INTEGER NOT NULL CHECK (status IN (0, 1, 2, 3, 4)),
+	from_address TEXT NOT NULL,
+	to_address   TEXT NOT NULL,
+	status       INTEGER NOT NULL CHECK (status IN (1, 2, 3, 4)),
+	value        INTEGER NOT NULL CHECK (value > 0),
 	created_at   TEXT NOT NULL
 );
 `
 	if _, err := d.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}
-	// Migration for databases created before created_at existed on handshakes.
-	return d.ensureColumn(ctx, "handshakes", "created_at", "TEXT NOT NULL DEFAULT ''")
+	// In-place migrations for older databases.
+	if err := d.ensureColumn(ctx, "rooms", "max_user", "INTEGER NOT NULL DEFAULT 100"); err != nil {
+		return err
+	}
+	if err := d.ensureColumn(ctx, "handshakes", "created_at", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := d.ensureColumn(ctx, "handshakes", "value", "INTEGER NOT NULL DEFAULT 1"); err != nil {
+		return err
+	}
+	// Older handshakes tables had FOREIGN KEYS to users; rooms now act as
+	// senders of the welcome handshake, so the table is rebuilt without them.
+	return d.rebuildHandshakesWithoutFK(ctx)
+}
+
+// rebuildHandshakesWithoutFK recreates the handshakes table without foreign
+// keys when any are present (SQLite cannot drop a constraint in place).
+func (d *DB) rebuildHandshakesWithoutFK(ctx context.Context) error {
+	var fkCount int
+	rows, err := d.QueryContext(ctx, "PRAGMA foreign_key_list(handshakes)")
+	if err != nil {
+		return fmt.Errorf("foreign_key_list: %w", err)
+	}
+	for rows.Next() {
+		fkCount++
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_ = rows.Close()
+	if fkCount == 0 {
+		return nil
+	}
+
+	const rebuild = `
+ALTER TABLE handshakes RENAME TO handshakes_old;
+
+CREATE TABLE handshakes (
+	tx_id        TEXT PRIMARY KEY,
+	from_address TEXT NOT NULL,
+	to_address   TEXT NOT NULL,
+	status       INTEGER NOT NULL CHECK (status IN (1, 2, 3, 4)),
+	value        INTEGER NOT NULL CHECK (value > 0),
+	created_at   TEXT NOT NULL
+);
+
+-- Legacy rows may have status 0 or empty created_at; normalize them on the way over.
+INSERT INTO handshakes (tx_id, from_address, to_address, status, value, created_at)
+SELECT tx_id, from_address, to_address,
+       CASE WHEN status = 0 THEN 1 ELSE status END,
+       COALESCE(value, 1),
+       CASE WHEN created_at IS NULL OR created_at = '' THEN '' ELSE created_at END
+FROM handshakes_old;
+
+DROP TABLE handshakes_old;
+`
+	if _, err := d.ExecContext(ctx, rebuild); err != nil {
+		return fmt.Errorf("rebuild handshakes: %w", err)
+	}
+	// The empty created_at rows from very old schemas get a sensible stamp.
+	if _, err := d.ExecContext(ctx,
+		`UPDATE handshakes
+		 SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+		 WHERE created_at = ''`); err != nil {
+		return fmt.Errorf("stamp legacy handshakes: %w", err)
+	}
+	return nil
 }
 
 // ensureColumn adds a column to a table when it is not present yet.
@@ -171,4 +242,19 @@ func (d *DB) exists(ctx context.Context, query string, args ...any) (bool, error
 		return false, err
 	}
 	return one, nil
+}
+
+// handshakeBalance returns income - outcome for a user, where income is the
+// sum of handshake values with to_address = address and outcome the sum of
+// handshake values with from_address = address.
+func (d *DB) handshakeBalance(ctx context.Context, address string) (int64, error) {
+	const q = `
+SELECT
+	(SELECT COALESCE(SUM(value), 0) FROM handshakes WHERE to_address = ?) -
+	(SELECT COALESCE(SUM(value), 0) FROM handshakes WHERE from_address = ?)`
+	var balance int64
+	if err := d.QueryRowContext(ctx, q, address, address).Scan(&balance); err != nil {
+		return 0, err
+	}
+	return balance, nil
 }

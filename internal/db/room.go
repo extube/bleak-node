@@ -9,9 +9,11 @@ import (
 	"github.com/extube/bleak-node/internal/model"
 )
 
-// CreateRoom inserts a new room with a server-generated address.
+// CreateRoom inserts a new room with a server-generated address and
+// max_user fixed at the default (not client-settable).
 func (d *DB) CreateRoom(ctx context.Context, room *model.Room) error {
 	now := time.Now().UTC()
+	room.MaxUser = model.DefaultRoomMaxUsers
 	room.CreatedAt = now
 	room.UpdatedAt = now
 
@@ -19,9 +21,9 @@ func (d *DB) CreateRoom(ctx context.Context, room *model.Room) error {
 	for attempt := 0; attempt < 3; attempt++ {
 		room.Address = newAddress(16)
 		_, err := d.ExecContext(ctx,
-			`INSERT INTO rooms (address, name, description, created_at, updated_at, deleted_at)
-			 VALUES (?, ?, ?, ?, ?, NULL)`,
-			room.Address, room.Name, room.Description,
+			`INSERT INTO rooms (address, name, description, max_user, created_at, updated_at, deleted_at)
+			 VALUES (?, ?, ?, ?, ?, ?, NULL)`,
+			room.Address, room.Name, room.Description, room.MaxUser,
 			room.CreatedAt.Format(time.RFC3339), room.UpdatedAt.Format(time.RFC3339),
 		)
 		if isUnique(err) {
@@ -35,7 +37,7 @@ func (d *DB) CreateRoom(ctx context.Context, room *model.Room) error {
 // ListRooms returns all non-deleted rooms ordered by address.
 func (d *DB) ListRooms(ctx context.Context) ([]model.Room, error) {
 	rows, err := d.QueryContext(ctx,
-		`SELECT address, name, description, created_at, updated_at, deleted_at
+		`SELECT address, name, description, max_user, created_at, updated_at, deleted_at
 		 FROM rooms WHERE deleted_at IS NULL ORDER BY address`)
 	if err != nil {
 		return nil, err
@@ -56,7 +58,7 @@ func (d *DB) ListRooms(ctx context.Context) ([]model.Room, error) {
 // GetRoom returns a single non-deleted room by address.
 func (d *DB) GetRoom(ctx context.Context, address string) (model.Room, error) {
 	row := d.QueryRowContext(ctx,
-		`SELECT address, name, description, created_at, updated_at, deleted_at
+		`SELECT address, name, description, max_user, created_at, updated_at, deleted_at
 		 FROM rooms WHERE address = ? AND deleted_at IS NULL`, address)
 	room, err := scanRoom(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -136,7 +138,7 @@ func (d *DB) DeleteRoom(ctx context.Context, address string) (model.Room, error)
 // fetchAnyRoom reads a room regardless of its deleted_at state.
 func fetchAnyRoom(ctx context.Context, d *sql.DB, address string) (model.Room, error) {
 	row := d.QueryRowContext(ctx,
-		`SELECT address, name, description, created_at, updated_at, deleted_at
+		`SELECT address, name, description, max_user, created_at, updated_at, deleted_at
 		 FROM rooms WHERE address = ?`, address)
 	room, err := scanRoom(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -165,7 +167,7 @@ func scanRoom(s scanner) (model.Room, error) {
 		updatedAt string
 		deletedAt sql.NullString
 	)
-	if err := s.Scan(&r.Address, &r.Name, &r.Description, &createdAt, &updatedAt, &deletedAt); err != nil {
+	if err := s.Scan(&r.Address, &r.Name, &r.Description, &r.MaxUser, &createdAt, &updatedAt, &deletedAt); err != nil {
 		return model.Room{}, err
 	}
 	r.CreatedAt = parseTS(createdAt)
