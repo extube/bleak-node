@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/extube/bleak-node/internal/model"
 )
@@ -34,9 +35,10 @@ func (d *DB) CreateHandshake(ctx context.Context, hs *model.Handshake) error {
 		}
 	}
 
+	hs.CreatedAt = time.Now().UTC()
 	_, err := d.ExecContext(ctx,
-		`INSERT INTO handshakes (tx_id, from_address, to_address, status) VALUES (?, ?, ?, ?)`,
-		hs.TxID, hs.FromAddress, hs.ToAddress, hs.Status)
+		`INSERT INTO handshakes (tx_id, from_address, to_address, status, created_at) VALUES (?, ?, ?, ?, ?)`,
+		hs.TxID, hs.FromAddress, hs.ToAddress, hs.Status, hs.CreatedAt.Format(time.RFC3339))
 	if isUnique(err) {
 		return errors.Join(ErrConflict, err)
 	}
@@ -46,13 +48,35 @@ func (d *DB) CreateHandshake(ctx context.Context, hs *model.Handshake) error {
 // GetHandshake returns a handshake by tx_id.
 func (d *DB) GetHandshake(ctx context.Context, txID string) (model.Handshake, error) {
 	row := d.QueryRowContext(ctx,
-		`SELECT tx_id, from_address, to_address, status FROM handshakes WHERE tx_id = ?`, txID)
-	var hs model.Handshake
-	err := row.Scan(&hs.TxID, &hs.FromAddress, &hs.ToAddress, &hs.Status)
+		`SELECT tx_id, from_address, to_address, status, created_at FROM handshakes WHERE tx_id = ?`, txID)
+	hs, err := scanHandshake(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.Handshake{}, errors.Join(ErrNotFound, err)
 	}
 	return hs, err
+}
+
+// ListUserHandshakes returns every handshake where the user is the sender or
+// the receiver, newest first.
+func (d *DB) ListUserHandshakes(ctx context.Context, address string) ([]model.Handshake, error) {
+	rows, err := d.QueryContext(ctx,
+		`SELECT tx_id, from_address, to_address, status, created_at FROM handshakes
+		 WHERE from_address = ? OR to_address = ?
+		 ORDER BY created_at DESC, tx_id ASC`, address, address)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []model.Handshake{}
+	for rows.Next() {
+		hs, err := scanHandshake(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, hs)
+	}
+	return out, rows.Err()
 }
 
 // UpdateHandshakeStatus updates the status of an existing handshake.
@@ -68,4 +92,16 @@ func (d *DB) UpdateHandshakeStatus(ctx context.Context, txID string, newStatus i
 		return model.Handshake{}, errors.Join(ErrNotFound, sql.ErrNoRows)
 	}
 	return d.GetHandshake(ctx, txID)
+}
+
+func scanHandshake(s scanner) (model.Handshake, error) {
+	var (
+		hs        model.Handshake
+		createdAt string
+	)
+	if err := s.Scan(&hs.TxID, &hs.FromAddress, &hs.ToAddress, &hs.Status, &createdAt); err != nil {
+		return model.Handshake{}, err
+	}
+	hs.CreatedAt = parseTS(createdAt)
+	return hs, nil
 }

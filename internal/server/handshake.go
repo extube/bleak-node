@@ -108,3 +108,21 @@ func (s *Server) UpdateHandshake(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, hs)
 }
+
+// ListUserHandshakes returns all handshakes of a user.
+//
+//	@Summary		list handshakes of a user
+//	@Description	Returns every handshake where the user is the sender or the receiver, newest first.
+//	@Tags			handshakes
+//	@Produce		json
+//	@Param			address	path	string	true	"User address"
+//	@Success		200	{array}	model.Handshake
+//	@Router			/api/handshake/user/{address} [get]
+func (s *Server) ListUserHandshakes(w http.ResponseWriter, r *http.Request) {
+	list, err := s.db.ListUserHandshakes(r.Context(), r.PathValue("address"))
+	if err != nil {
+		s.mapError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, list)
+}

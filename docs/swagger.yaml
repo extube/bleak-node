@@ -2,6 +2,8 @@ basePath: /
 definitions:
   model.Handshake:
     properties:
+      created_at:
+        type: string
       from_address:
         example: 0xuser123
         type: string
@@ -70,8 +72,6 @@ definitions:
     type: object
   server.CreateRoomRequest:
     properties:
-      address:
-        type: string
       description:
         type: string
       name:
@@ -79,8 +79,6 @@ definitions:
     type: object
   server.CreateUserRequest:
     properties:
-      address:
-        type: string
       name:
         type: string
       private_bio:
@@ -188,6 +186,28 @@ paths:
       summary: update handshake
       tags:
       - handshakes
+  /api/handshake/user/{address}:
+    get:
+      description: Returns every handshake where the user is the sender or the receiver,
+        newest first.
+      parameters:
+      - description: User address
+        in: path
+        name: address
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/model.Handshake'
+            type: array
+      summary: list handshakes of a user
+      tags:
+      - handshakes
   /api/room:
     get:
       description: Returns all non-deleted rooms.
@@ -206,7 +226,7 @@ paths:
     post:
       consumes:
       - application/json
-      description: Creates a room with a unique address.
+      description: Creates a room with a server-generated unique address.
       parameters:
       - description: Room to create
         in: body
