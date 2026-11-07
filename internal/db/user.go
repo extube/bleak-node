@@ -25,16 +25,21 @@ func (d *DB) CreateUser(ctx context.Context, roomAddress string, user *model.Use
 	user.CreatedAt = now
 	user.UpdatedAt = now
 
-	_, err = d.ExecContext(ctx,
-		`INSERT INTO users (address, name, room, public_bio, private_bio, created_at, updated_at, deleted_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`,
-		user.Address, user.Name, roomAddress, user.PublicBio, user.PrivateBio,
-		user.CreatedAt.Format(time.RFC3339), user.UpdatedAt.Format(time.RFC3339),
-	)
-	if isUnique(err) {
-		return errors.Join(ErrConflict, err)
+	// Address is generated server-side; retry on the unlikely collision.
+	for attempt := 0; attempt < 3; attempt++ {
+		user.Address = newAddress(16)
+		_, err = d.ExecContext(ctx,
+			`INSERT INTO users (address, name, room, public_bio, private_bio, created_at, updated_at, deleted_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`,
+			user.Address, user.Name, roomAddress, user.PublicBio, user.PrivateBio,
+			user.CreatedAt.Format(time.RFC3339), user.UpdatedAt.Format(time.RFC3339),
+		)
+		if isUnique(err) {
+			continue
+		}
+		return err
 	}
-	return err
+	return errors.Join(ErrConflict, errors.New("could not generate unique user address"))
 }
 
 // ListRoomUsers returns all non-deleted users of a room.

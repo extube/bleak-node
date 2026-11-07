@@ -26,8 +26,9 @@ type User struct {
 
 // Handshake is a directed interaction between two users.
 type Handshake struct {
-	TxID        string `json:"tx_id" example:"0xtx42"`
-	FromAddress string `json:"from_address" example:"0xuser123"`
-	ToAddress   string `json:"to_address" example:"0xuser456"`
-	Status      int    `json:"status" example:"1"`
+	TxID        string    `json:"tx_id" example:"0xtx42"`
+	FromAddress string    `json:"from_address" example:"0xuser123"`
+	ToAddress   string    `json:"to_address" example:"0xuser456"`
+	Status      int       `json:"status" example:"1"`
+	CreatedAt   time.Time `json:"created_at"`
 }

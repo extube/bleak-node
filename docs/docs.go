@@ -70,6 +70,38 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/handshake/user/{address}": {
+            "get": {
+                "description": "Returns every handshake where the user is the sender or the receiver, newest first.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "handshakes"
+                ],
+                "summary": "list handshakes of a user",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "User address",
+                        "name": "address",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/model.Handshake"
+                            }
+                        }
+                    }
+                }
+            }
+        },
         "/api/handshake/{tx_id}": {
             "put": {
                 "description": "Updates a handshake's status. Must be one of {0,1,2,3,4}.",
@@ -146,7 +178,7 @@ const docTemplate = `{
                 }
             },
             "post": {
-                "description": "Creates a room with a unique address.",
+                "description": "Creates a room with a server-generated unique address.",
                 "consumes": [
                     "application/json"
                 ],
@@ -537,6 +569,9 @@ const docTemplate = `{
         "model.Handshake": {
             "type": "object",
             "properties": {
+                "created_at": {
+                    "type": "string"
+                },
                 "from_address": {
                     "type": "string",
                     "example": "0xuser123"
@@ -635,9 +670,6 @@ const docTemplate = `{
         "server.CreateRoomRequest": {
             "type": "object",
             "properties": {
-                "address": {
-                    "type": "string"
-                },
                 "description": {
                     "type": "string"
                 },
@@ -649,9 +681,6 @@ const docTemplate = `{
         "server.CreateUserRequest": {
             "type": "object",
             "properties": {
-                "address": {
-                    "type": "string"
-                },
                 "name": {
                     "type": "string"
                 },

@@ -3,7 +3,9 @@ package db
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -82,11 +84,48 @@ CREATE TABLE IF NOT EXISTS handshakes (
 	tx_id        TEXT PRIMARY KEY,
 	from_address TEXT NOT NULL REFERENCES users(address),
 	to_address   TEXT NOT NULL REFERENCES users(address),
-	status       INTEGER NOT NULL CHECK (status IN (0, 1, 2, 3, 4))
+	status       INTEGER NOT NULL CHECK (status IN (0, 1, 2, 3, 4)),
+	created_at   TEXT NOT NULL
 );
 `
 	if _, err := d.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("migrate: %w", err)
+	}
+	// Migration for databases created before created_at existed on handshakes.
+	return d.ensureColumn(ctx, "handshakes", "created_at", "TEXT NOT NULL DEFAULT ''")
+}
+
+// ensureColumn adds a column to a table when it is not present yet.
+func (d *DB) ensureColumn(ctx context.Context, table, column, decl string) error {
+	rows, err := d.QueryContext(ctx, "PRAGMA table_info("+table+")")
+	if err != nil {
+		return fmt.Errorf("table_info %s: %w", table, err)
+	}
+	defer rows.Close()
+
+	var found bool
+	for rows.Next() {
+		var (
+			cid, notnull, pk int
+			name, ctype      string
+			dflt             sql.NullString
+		)
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return err
+		}
+		if name == column {
+			found = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if found {
+		return nil
+	}
+	// #nosec G201 -- table/column names are compile-time constants, not user input.
+	if _, err := d.ExecContext(ctx, fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, decl)); err != nil {
+		return fmt.Errorf("add column %s.%s: %w", table, column, err)
 	}
 	return nil
 }
@@ -94,6 +133,15 @@ CREATE TABLE IF NOT EXISTS handshakes (
 // isUnique reports whether err is a SQLite unique-constraint violation.
 func isUnique(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed")
+}
+
+// newAddress generates a unique random address of the form "0x" + hex(nBytes).
+// The caller is expected to retry on ErrConflict in the (astronomically
+// unlikely) event of a collision.
+func newAddress(nBytes int) string {
+	buf := make([]byte, nBytes)
+	_, _ = rand.Read(buf)
+	return "0x" + hex.EncodeToString(buf)
 }
 
 // parseTS parses an RFC3339 timestamp string; zero time when empty/invalid.

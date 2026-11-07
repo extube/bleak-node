@@ -9,22 +9,27 @@ import (
 	"github.com/extube/bleak-node/internal/model"
 )
 
-// CreateRoom inserts a new room.
+// CreateRoom inserts a new room with a server-generated address.
 func (d *DB) CreateRoom(ctx context.Context, room *model.Room) error {
 	now := time.Now().UTC()
 	room.CreatedAt = now
 	room.UpdatedAt = now
 
-	_, err := d.ExecContext(ctx,
-		`INSERT INTO rooms (address, name, description, created_at, updated_at, deleted_at)
-		 VALUES (?, ?, ?, ?, ?, NULL)`,
-		room.Address, room.Name, room.Description,
-		room.CreatedAt.Format(time.RFC3339), room.UpdatedAt.Format(time.RFC3339),
-	)
-	if isUnique(err) {
-		return errors.Join(ErrConflict, err)
+	// Address is generated server-side; retry on the unlikely collision.
+	for attempt := 0; attempt < 3; attempt++ {
+		room.Address = newAddress(16)
+		_, err := d.ExecContext(ctx,
+			`INSERT INTO rooms (address, name, description, created_at, updated_at, deleted_at)
+			 VALUES (?, ?, ?, ?, ?, NULL)`,
+			room.Address, room.Name, room.Description,
+			room.CreatedAt.Format(time.RFC3339), room.UpdatedAt.Format(time.RFC3339),
+		)
+		if isUnique(err) {
+			continue
+		}
+		return err
 	}
-	return err
+	return errors.Join(ErrConflict, errors.New("could not generate unique room address"))
 }
 
 // ListRooms returns all non-deleted rooms ordered by address.
