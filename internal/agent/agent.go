@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -25,6 +26,9 @@ type Config struct {
 	Timeout time.Duration
 	// MaxAttempts before an event is marked failed.
 	MaxAttempts int
+	// EchoRetries is how many times a reply that verbatim-repeats one of the
+	// agent's earlier lines is regenerated before it is saved anyway.
+	EchoRetries int
 }
 
 // Worker consumes the event queue and generates the agent messages.
@@ -42,6 +46,9 @@ func New(database *db.DB, cfg Config, logger *slog.Logger) *Worker {
 	}
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = 90 * time.Second
+	}
+	if cfg.EchoRetries <= 0 {
+		cfg.EchoRetries = 2
 	}
 	if cfg.MaxAttempts <= 0 {
 		cfg.MaxAttempts = 3
@@ -140,20 +147,47 @@ func (w *Worker) process(ctx context.Context, ev model.Event) error {
 
 	// Is this reply the first message of this agent in the chat?
 	myTurns := 0
+	priorWords := make(map[string]struct{}, len(msgs)) // normalized replies already said
 	for _, m := range msgs {
 		if m.From == ev.Speaker {
 			myTurns++
+			priorWords[normalize(m.Content)] = struct{}{}
 		}
 	}
 
-	prompt := buildPrompt(ev.Chat, speaker, listener, msgs, myTurns, overLimit)
-	out, err := w.llm.Complete(ctx, prompt)
-	if err != nil {
-		return err
+	// Anti-echo: regenerate up to cfg.EchoRetries times when the model
+	// parrots one of its earlier lines verbatim.
+	var (
+		content  string
+		repeated bool
+	)
+	for attempt := 0; attempt <= w.cfg.EchoRetries; attempt++ {
+		nudge := ""
+		if attempt > 0 {
+			nudge = fmt.Sprintf("IMPORTANT: your previous reply repeated a line you already said. Answer with something NEW: react to %s's last message with a concrete detail or question from your bios.", listener.Name)
+		}
+		prompt := buildPrompt(ev.Chat, speaker, listener, msgs, myTurns, overLimit, nudge)
+		out, err := w.llm.Complete(ctx, prompt)
+		if err != nil {
+			return err
+		}
+		candidate := sanitizeContent(out)
+		if candidate == "" {
+			return errors.New("llm returned an empty message")
+		}
+		content = candidate
+		if _, dup := priorWords[normalize(candidate)]; dup {
+			repeated = true
+			continue
+		}
+		repeated = false
+		break
 	}
-	content := sanitizeContent(out)
-	if content == "" {
-		return errors.New("llm returned an empty message")
+	if repeated {
+		// Even the retries parroted; save the last one instead of blocking
+		// the conversation, but leave a trace.
+		w.log.Warn("agent message repeats an earlier line",
+			"chat", ev.Chat, "speaker", ev.Speaker)
 	}
 
 	m := model.Message{From: ev.Speaker, To: ev.Listener, Content: content}
