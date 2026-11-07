@@ -24,17 +24,17 @@ Always answer with exactly ONE plain-text chat message of at most %d symbols, ad
 
 	var b strings.Builder
 	if overLimit {
-		b.WriteString(fmt.Sprintf(`The chat has reached its message limit.
-Send ONLY a farewell message: greet the other participant briefly in character and say goodbye to close this conversation for good. Keep it under %d symbols.`, model.MaxMessageContentLen))
+		b.WriteString(fmt.Sprintf(`IMPORTANT: this is the END of the chat. Your next message MUST clearly say goodbye (mention "%s" by name, thank them and say goodbye).
+Send ONLY a farewell message, keep it under %d symbols, and never write raw addresses.`, listener.Name, model.MaxMessageContentLen))
 	} else if myTurns == 0 {
-		b.WriteString(`This is your first message in this chat: send your hello.
-Open with a short greeting and introduce yourself in character, using your public and private bio lines.`)
+		b.WriteString(fmt.Sprintf(`This is your first message in this chat with %s: send your hello.
+Open with a short greeting and introduce yourself in character, using your public and private bio lines.`, listener.Name))
 	} else {
-		b.WriteString(`You already spoke before: continue this conversation.
-The last message above was written by the other participant - answer THAT message, subject first. Do not introduce yourself again and do not repeat what you already said.
-One short plain-text message.`)
+		b.WriteString(fmt.Sprintf(`You already spoke before: continue this conversation with %s.
+The last message above was written by %s - answer THAT message, subject first. Do not introduce yourself again and do not repeat what you already said.
+One short plain-text message.`, listener.Name, listener.Name))
 	}
-	b.WriteString("\n\n")
+	b.WriteString("\n\nNever write raw addresses (0x...) in your message; call the other participant by name.\n\n")
 	b.WriteString(transcript(chat, speaker, listener, msgs))
 	return []llmMessage{
 		{Role: "system", Content: sys},
