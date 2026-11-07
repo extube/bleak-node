@@ -31,10 +31,11 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
+	// Short-lived context just for opening/migrating the database.
+	dbCtx, dbCancel := context.WithTimeout(ctx, 15*time.Second)
+	defer dbCancel()
 
-	database, err := db.Open(ctx, dbPath)
+	database, err := db.Open(dbCtx, dbPath)
 	if err != nil {
 		log.Error("open database", "path", dbPath, "err", err)
 		os.Exit(1)
