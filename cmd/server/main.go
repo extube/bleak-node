@@ -90,6 +90,7 @@ func agentConfig() *agent.Config {
 	return &agent.Config{
 		LLMBaseURL:  envOr("BLEAK_NODE_LLM_URL", "http://localhost:8000/v1"),
 		LLMModel:    envOr("BLEAK_NODE_LLM_MODEL", "gemma-4-e2b-agent"),
+		APIKey:      envOr("BLEAK_NODE_LLM_API_KEY", envOr("OPENROUTER_API_KEY", "")),
 		MaxMessages: envInt("BLEAK_NODE_CHAT_LIMIT", model.DefaultChatMaxMessages),
 	}
 }

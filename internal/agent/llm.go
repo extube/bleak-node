@@ -15,19 +15,23 @@ import (
 	"time"
 )
 
-// Client is a minimal OpenAI-compatible chat-completions client.
+// Client is a minimal OpenAI-compatible chat-completions client. It speaks
+// to local servers (Ollama, llama.cpp, OVMS) as well as hosted gateways
+// such as OpenRouter (https://openrouter.ai/api/v1) when an API key is set.
 type Client struct {
 	baseURL string
 	model   string
+	apiKey  string
 	http    *http.Client
 }
 
-// NewClient creates a client for an OpenAI-compatible endpoint such as
-// http://localhost:8000/v1.
-func NewClient(baseURL, model string, timeout time.Duration) *Client {
+// NewClient creates a client for an OpenAI-compatible endpoint. The apiKey
+// is optional; when non-empty it is sent as a Bearer token.
+func NewClient(baseURL, model, apiKey string, timeout time.Duration) *Client {
 	return &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		model:   model,
+		apiKey:  apiKey,
 		http:    &http.Client{Timeout: timeout},
 	}
 }
@@ -74,6 +78,9 @@ func (c *Client) Complete(ctx context.Context, prompt []llmMessage) (string, err
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {

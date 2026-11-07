@@ -74,8 +74,8 @@ CREATE TABLE IF NOT EXISTS users (
 	address     TEXT PRIMARY KEY,
 	name        TEXT NOT NULL,
 	room        TEXT NOT NULL REFERENCES rooms(address),
-	public_bio  TEXT NOT NULL DEFAULT '' CHECK (length(public_bio) <= 64),
-	private_bio TEXT NOT NULL DEFAULT '' CHECK (length(private_bio) <= 64),
+	public_bio  TEXT NOT NULL DEFAULT '' CHECK (length(public_bio) <= 255),
+	private_bio TEXT NOT NULL DEFAULT '' CHECK (length(private_bio) <= 255),
 	created_at  TEXT NOT NULL,
 	updated_at  TEXT NOT NULL,
 	deleted_at  TEXT
@@ -177,7 +177,55 @@ WHERE room = ''`); err != nil {
 	}
 	// Older handshakes tables had FOREIGN KEYS to users; rooms now act as
 	// senders of the welcome handshake, so the table is rebuilt without them.
-	return d.rebuildHandshakesWithoutFK(ctx)
+	if err := d.rebuildHandshakesWithoutFK(ctx); err != nil {
+		return err
+	}
+	// Richer agent personas: bio limit was raised from 64 to 255 symbols.
+	return d.rebuildUsersWithLongBio(ctx)
+}
+
+// rebuildUsersWithLongBio recreates the users table when its bio CHECK
+// constraints still cap the bios at 64 symbols (SQLite cannot alter a
+// constraint in place).
+func (d *DB) rebuildUsersWithLongBio(ctx context.Context) error {
+	var sqlText string
+	if err := d.QueryRowContext(ctx,
+		`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'users'`).Scan(&sqlText); err != nil {
+		return fmt.Errorf("sqlite_master users: %w", err)
+	}
+	if strings.Contains(sqlText, "length(public_bio) <= 255") {
+		return nil
+	}
+
+	const rebuild = `
+ALTER TABLE users RENAME TO users_old;
+
+CREATE TABLE users (
+	address     TEXT PRIMARY KEY,
+	name        TEXT NOT NULL,
+	room        TEXT NOT NULL REFERENCES rooms(address),
+	public_bio  TEXT NOT NULL DEFAULT '' CHECK (length(public_bio) <= 255),
+	private_bio TEXT NOT NULL DEFAULT '' CHECK (length(private_bio) <= 255),
+	created_at  TEXT NOT NULL,
+	updated_at  TEXT NOT NULL,
+	deleted_at  TEXT
+);
+
+INSERT INTO users (address, name, room, public_bio, private_bio, created_at, updated_at, deleted_at)
+SELECT address, name, room, public_bio, private_bio, created_at, updated_at, deleted_at
+FROM users_old;
+
+DROP TABLE users_old;
+`
+	// The index comes back automatically with the table name it targets.
+	if _, err := d.ExecContext(ctx, rebuild); err != nil {
+		return fmt.Errorf("rebuild users: %w", err)
+	}
+	if _, err := d.ExecContext(ctx,
+		`CREATE INDEX IF NOT EXISTS idx_users_room ON users(room)`); err != nil {
+		return fmt.Errorf("rebuild users index: %w", err)
+	}
+	return nil
 }
 
 // rebuildHandshakesWithoutFK recreates the handshakes table without foreign

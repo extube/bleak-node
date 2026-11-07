@@ -22,7 +22,7 @@ type UpdateUserRequest struct {
 	PrivateBio *string `json:"private_bio"`
 }
 
-const maxUserBioLen = 64
+const maxUserBioLen = 255
 
 // CreateUser adds a user to a room.
 //
@@ -49,11 +49,11 @@ func (s *Server) CreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if n := utf8.RuneCountInString(req.PublicBio); n > maxUserBioLen {
-		respond(w, http.StatusBadRequest, "public_bio must be at most 64 symbols")
+		respond(w, http.StatusBadRequest, "public_bio must be at most 255 symbols")
 		return
 	}
 	if n := utf8.RuneCountInString(req.PrivateBio); n > maxUserBioLen {
-		respond(w, http.StatusBadRequest, "private_bio must be at most 64 symbols")
+		respond(w, http.StatusBadRequest, "private_bio must be at most 255 symbols")
 		return
 	}
 
@@ -132,11 +132,11 @@ func (s *Server) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.PublicBio != nil && utf8.RuneCountInString(*req.PublicBio) > maxUserBioLen {
-		respond(w, http.StatusBadRequest, "public_bio must be at most 64 symbols")
+		respond(w, http.StatusBadRequest, "public_bio must be at most 255 symbols")
 		return
 	}
 	if req.PrivateBio != nil && utf8.RuneCountInString(*req.PrivateBio) > maxUserBioLen {
-		respond(w, http.StatusBadRequest, "private_bio must be at most 64 symbols")
+		respond(w, http.StatusBadRequest, "private_bio must be at most 255 symbols")
 		return
 	}
 
