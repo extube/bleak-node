@@ -16,23 +16,27 @@ import (
 )
 
 // Client is a minimal OpenAI-compatible chat-completions client. It speaks
-// to local servers (Ollama, llama.cpp, OVMS) as well as hosted gateways
-// such as OpenRouter (https://openrouter.ai/api/v1) when an API key is set.
+// to local servers (Ollama, llama.cpp, OVMS, Qwen) as well as hosted
+// gateways when an API key is set.
 type Client struct {
 	baseURL string
 	model   string
 	apiKey  string
-	http    *http.Client
+	// disableThinking sends chat_template_kwargs {"enable_thinking": false}
+	// for servers of thinking models (Qwen-style); ignored when false.
+	disableThinking bool
+	http            *http.Client
 }
 
 // NewClient creates a client for an OpenAI-compatible endpoint. The apiKey
 // is optional; when non-empty it is sent as a Bearer token.
-func NewClient(baseURL, model, apiKey string, timeout time.Duration) *Client {
+func NewClient(baseURL, model, apiKey string, timeout time.Duration, disableThinking bool) *Client {
 	return &Client{
-		baseURL: strings.TrimRight(baseURL, "/"),
-		model:   model,
-		apiKey:  apiKey,
-		http:    &http.Client{Timeout: timeout},
+		baseURL:         strings.TrimRight(baseURL, "/"),
+		model:           model,
+		apiKey:          apiKey,
+		disableThinking: disableThinking,
+		http:            &http.Client{Timeout: timeout},
 	}
 }
 
@@ -48,6 +52,9 @@ type chatRequest struct {
 	MaxTokens   int          `json:"max_tokens,omitempty"`
 	Temperature float64      `json:"temperature,omitempty"`
 	Stream      bool         `json:"stream"`
+	// ChatTemplateArgs silences the sandbox thinking channel of Qwen-style
+	// models so the answer lands directly in `content`.
+	ChatTemplateArgs map[string]any `json:"chat_template_kwargs,omitempty"`
 }
 
 type chatResponse struct {
@@ -61,13 +68,23 @@ type chatResponse struct {
 	} `json:"error"`
 }
 
+// ternary returns a when ok, else b.
+func ternary[T any](ok bool, a, b T) T {
+	if ok {
+		return a
+	}
+	return b
+}
+
 // Complete sends the prompt and returns the plain assistant message.
 func (c *Client) Complete(ctx context.Context, prompt []llmMessage) (string, error) {
 	body, err := json.Marshal(chatRequest{
-		Model:       c.model,
-		Messages:    prompt,
-		MaxTokens:   200,
-		Temperature: 0.8,
+		Model:            c.model,
+		Messages:         prompt,
+		MaxTokens:        512,
+		Temperature:      0.7,
+		Stream:           false,
+		ChatTemplateArgs: ternary(c.disableThinking, map[string]any{"enable_thinking": false}, nil),
 	})
 	if err != nil {
 		return "", err
