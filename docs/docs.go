@@ -53,6 +53,41 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/chat/{address}/kickoff": {
+            "post": {
+                "description": "Clears the message history of the chat and returns the interaction to the queue. The speaker of the first turn is the user who sent the pair's earliest handshake; the agents then continue automatically until the chat limit.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "chats"
+                ],
+                "summary": "kick off chat",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Chat address",
+                        "name": "address",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/server.KickoffResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/api/chat/{address}/message": {
             "get": {
                 "description": "Returns every message in the chat, oldest first.",
@@ -1017,6 +1052,20 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "public_bio": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.KickoffResponse": {
+            "type": "object",
+            "properties": {
+                "chat": {
+                    "type": "string"
+                },
+                "cleared": {
+                    "type": "integer"
+                },
+                "speaker": {
                     "type": "string"
                 }
             }
