@@ -19,22 +19,6 @@ func IsValidStatus(s int) bool {
 	return ok
 }
 
-// FindHandshake returns the directed handshake from -> to when it already
-// exists (a handshake pair is unique per direction).
-func (d *DB) FindHandshake(ctx context.Context, from, to string) (model.Handshake, bool, error) {
-	row := d.QueryRowContext(ctx,
-		`SELECT tx_id, from_address, to_address, status, value, created_at
-		 FROM handshakes WHERE from_address = ? AND to_address = ?`, from, to)
-	hs, err := scanHandshake(row)
-	if errors.Is(err, sql.ErrNoRows) {
-		return model.Handshake{}, false, nil
-	}
-	if err != nil {
-		return model.Handshake{}, false, err
-	}
-	return hs, true, nil
-}
-
 // CreateHandshake registers a user-to-user handshake with status in [1..4]
 // and a server-generated tx_id. A handshake pair (from, to) is unique:
 // when it already exists nothing is created and the live handshake is
@@ -58,9 +42,17 @@ func (d *DB) CreateHandshake(ctx context.Context, hs *model.Handshake) (bool, er
 		}
 	}
 
+	// Everything below runs in one transaction: the handshake insert and the
+	// automatic chat creation are atomic (single-writer pool makes the tx safe).
+	tx, err := d.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	// Idempotent: an existing directed pair is returned as-is, no error,
 	// no balance impact.
-	existing, found, err := d.FindHandshake(ctx, hs.FromAddress, hs.ToAddress)
+	existing, found, err := findHandshakeOn(ctx, tx, hs.FromAddress, hs.ToAddress)
 	if err != nil {
 		return false, err
 	}
@@ -70,7 +62,7 @@ func (d *DB) CreateHandshake(ctx context.Context, hs *model.Handshake) (bool, er
 	}
 
 	// Income > outcome required to send.
-	balance, err := d.handshakeBalance(ctx, hs.FromAddress)
+	balance, err := handshakeBalanceOn(ctx, tx, hs.FromAddress)
 	if err != nil {
 		return false, err
 	}
@@ -84,9 +76,10 @@ func (d *DB) CreateHandshake(ctx context.Context, hs *model.Handshake) (bool, er
 	hs.CreatedAt = time.Now().UTC()
 
 	// tx_id is generated server-side; retry on the unlikely collision.
+	created := false
 	for attempt := 0; attempt < 3; attempt++ {
 		hs.TxID = newTxID()
-		_, err := d.ExecContext(ctx,
+		_, err = tx.ExecContext(ctx,
 			`INSERT INTO handshakes (tx_id, from_address, to_address, status, value, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
 			hs.TxID, hs.FromAddress, hs.ToAddress, hs.Status, hs.Value, hs.CreatedAt.Format(time.RFC3339))
 		if isUnique(err) {
@@ -95,9 +88,57 @@ func (d *DB) CreateHandshake(ctx context.Context, hs *model.Handshake) (bool, er
 		if err != nil {
 			return false, err
 		}
-		return true, nil
+		created = true
+		break
 	}
-	return false, errors.Join(ErrConflict, errors.New("could not generate unique handshake tx_id"))
+	if !created {
+		return false, errors.Join(ErrConflict, errors.New("could not generate unique handshake tx_id"))
+	}
+
+	// Chat contract: once both directions (A -> B and B -> A) exist, the chat
+	// with its participants is created automatically.
+	both, err := bothHandshakeDirections(ctx, tx, hs.FromAddress, hs.ToAddress)
+	if err != nil {
+		return false, err
+	}
+	if both {
+		if _, err := ensureChat(ctx, tx, hs.FromAddress, hs.ToAddress); err != nil {
+			return false, err
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	return created, nil
+}
+
+// findHandshakeOn runs the pair lookup on the given executor.
+func findHandshakeOn(ctx context.Context, q rowQuerier, from, to string) (model.Handshake, bool, error) {
+	row := q.QueryRowContext(ctx,
+		`SELECT tx_id, from_address, to_address, status, value, created_at
+		 FROM handshakes WHERE from_address = ? AND to_address = ?`, from, to)
+	hs, err := scanHandshake(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.Handshake{}, false, nil
+	}
+	if err != nil {
+		return model.Handshake{}, false, err
+	}
+	return hs, true, nil
+}
+
+// handshakeBalanceOn computes income - outcome on the given executor.
+func handshakeBalanceOn(ctx context.Context, q rowQuerier, address string) (int64, error) {
+	const q2 = `
+SELECT
+	(SELECT COALESCE(SUM(value), 0) FROM handshakes WHERE to_address = ?) -
+	(SELECT COALESCE(SUM(value), 0) FROM handshakes WHERE from_address = ?)`
+	var balance int64
+	if err := q.QueryRowContext(ctx, q2, address, address).Scan(&balance); err != nil {
+		return 0, err
+	}
+	return balance, nil
 }
 
 // createSystemHandshake inserts the welcome handshake from a room to a new

@@ -36,6 +36,35 @@ type Handshake struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 
+// Chat links two users who share messages. Created automatically once
+// handshakes exist in both directions (A -> B and B -> A).
+type Chat struct {
+	Address   string    `json:"address" example:"0xchat123"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// Participant is one of the two chat members; unique key is (chat, user).
+type Participant struct {
+	Chat string `json:"chat" example:"0xchat123"`
+	User string `json:"user" example:"0xuser123"`
+}
+
+// Message is a text exchange inside a chat.
+type Message struct {
+	TxID      string    `json:"tx_id" example:"0x9f1c0d..."`
+	From      string    `json:"from" example:"0xuser123"`
+	To        string    `json:"to" example:"0xuser456"`
+	CreatedAt time.Time `json:"created_at"`
+	Content   string    `json:"content" example:"hello there"`
+	Chat      string    `json:"chat" example:"0xchat123"`
+}
+
+// Validation limits.
+const (
+	// MaxMessageContentLen is the maximum number of symbols in message content.
+	MaxMessageContentLen = 255
+)
+
 // Balance constants for the handshake economy.
 const (
 	// DefaultRoomMaxUsers is assigned to every room as its max_user.

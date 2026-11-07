@@ -93,6 +93,31 @@ CREATE TABLE IF NOT EXISTS handshakes (
 	value        INTEGER NOT NULL CHECK (value > 0),
 	created_at   TEXT NOT NULL
 );
+
+-- Chats are created automatically once both handshake directions exist.
+CREATE TABLE IF NOT EXISTS chats (
+	address    TEXT PRIMARY KEY,
+	created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS participants (
+	chat TEXT NOT NULL REFERENCES chats(address),
+	user TEXT NOT NULL REFERENCES users(address),
+	PRIMARY KEY (chat, user)
+);
+
+CREATE INDEX IF NOT EXISTS idx_participants_user ON participants(user);
+
+CREATE TABLE IF NOT EXISTS messages (
+	tx_id      TEXT PRIMARY KEY,
+	"from"     TEXT NOT NULL REFERENCES users(address),
+	"to"       TEXT NOT NULL REFERENCES users(address),
+	created_at TEXT NOT NULL,
+	content    TEXT NOT NULL CHECK (length(content) <= 255),
+	chat       TEXT NOT NULL REFERENCES chats(address)
+);
+
+CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat);
 `
 	if _, err := d.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("migrate: %w", err)
@@ -242,19 +267,4 @@ func (d *DB) exists(ctx context.Context, query string, args ...any) (bool, error
 		return false, err
 	}
 	return one, nil
-}
-
-// handshakeBalance returns income - outcome for a user, where income is the
-// sum of handshake values with to_address = address and outcome the sum of
-// handshake values with from_address = address.
-func (d *DB) handshakeBalance(ctx context.Context, address string) (int64, error) {
-	const q = `
-SELECT
-	(SELECT COALESCE(SUM(value), 0) FROM handshakes WHERE to_address = ?) -
-	(SELECT COALESCE(SUM(value), 0) FROM handshakes WHERE from_address = ?)`
-	var balance int64
-	if err := d.QueryRowContext(ctx, q, address, address).Scan(&balance); err != nil {
-		return 0, err
-	}
-	return balance, nil
 }
