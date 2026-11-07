@@ -246,6 +246,11 @@ SELECT address, name, room, public_bio, private_bio, created_at, updated_at, del
 		if _, err := d.ExecContext(ctx, `DROP TABLE users_old`); err != nil {
 			return fmt.Errorf("drop users_old: %w", err)
 		}
+		// The referencing tables may still carry FKs that point at
+		// users_old (renamed under a different pragma mode): rebuild them.
+		if err := d.repairUsersReference(ctx); err != nil {
+			return err
+		}
 	} else {
 		// Regular upgrade: 64-legacy schema present.
 		const rebuild = `
@@ -277,8 +282,78 @@ DROP TABLE users_old;
 		`CREATE INDEX IF NOT EXISTS idx_users_room ON users(room)`); err != nil {
 		return fmt.Errorf("rebuild users index: %w", err)
 	}
+	// Also repair references left over from an earlier partial run even
+	// when users_old itself is already gone.
+	if err := d.repairUsersReference(ctx); err != nil {
+		return err
+	}
 	if err := d.vacuum(ctx); err != nil {
 		return err
+	}
+	return nil
+}
+
+// repairUsersReference rebuilds tables that still hold foreign keys pointing
+// at users_old so they reference users again.
+func (d *DB) repairUsersReference(ctx context.Context) error {
+	const participantsDDL = `
+CREATE TABLE participants (
+	chat TEXT NOT NULL REFERENCES chats(address),
+	user TEXT NOT NULL REFERENCES users(address),
+	PRIMARY KEY (chat, user)
+)`
+	const messagesDDL = `
+CREATE TABLE messages (
+	tx_id      TEXT PRIMARY KEY,
+	"from"     TEXT NOT NULL REFERENCES users(address),
+	"to"       TEXT NOT NULL REFERENCES users(address),
+	created_at TEXT NOT NULL,
+	content    TEXT NOT NULL CHECK (length(content) <= 255),
+	chat       TEXT NOT NULL REFERENCES chats(address)
+)`
+	if err := d.rebuildTableIfFK(ctx, "participants", participantsDDL); err != nil {
+		return err
+	}
+	if err := d.rebuildTableIfFK(ctx, "messages", messagesDDL); err != nil {
+		return err
+	}
+	indexes := []string{
+		`CREATE INDEX IF NOT EXISTS idx_participants_user ON participants(user)`,
+		`CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat)`,
+	}
+	for _, create := range indexes {
+		if _, err := d.ExecContext(ctx, create); err != nil {
+			return fmt.Errorf("recreate index: %w", err)
+		}
+	}
+	return nil
+}
+
+// rebuildTableIfFK recreates a table (same columns, new DDL) when its stored
+// CREATE statement still references users_old in a foreign key.
+func (d *DB) rebuildTableIfFK(ctx context.Context, table, ddl string) error {
+	var sqlText sql.NullString
+	if err := d.QueryRowContext(ctx,
+		fmt.Sprintf(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = '%s'`, table)).Scan(&sqlText); err != nil {
+		return fmt.Errorf("sqlite_master %s: %w", table, err)
+	}
+	current := sqlText.String
+	if !sqlText.Valid || !strings.Contains(current, `"users_old"`) { // #nosec G201 -- table name is an internal constant.
+		return nil
+	}
+
+	const rebuild = `
+ALTER TABLE %s RENAME TO %s_old;
+
+%s;
+
+INSERT INTO "%s" SELECT * FROM "%s_old";
+
+DROP TABLE "%s_old";
+`
+	// #nosec G201 -- identifiers are internal constants, not user input.
+	if _, err := d.ExecContext(ctx, fmt.Sprintf(rebuild, table, table, ddl, table, table, table)); err != nil {
+		return fmt.Errorf("rebuild %s: %w", table, err)
 	}
 	return nil
 }
