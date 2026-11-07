@@ -144,6 +144,11 @@ func newAddress(nBytes int) string {
 	return "0x" + hex.EncodeToString(buf)
 }
 
+// newTxID generates a tx id of the form "0x" + 64 hex chars (256 bits).
+func newTxID() string {
+	return newAddress(32)
+}
+
 // parseTS parses an RFC3339 timestamp string; zero time when empty/invalid.
 func parseTS(s string) time.Time {
 	t, _ := time.Parse(time.RFC3339, s)

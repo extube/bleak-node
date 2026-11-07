@@ -43,7 +43,6 @@ func (s *Server) Handler() http.Handler {
 	// Handshakes.
 	mux.HandleFunc("POST /api/handshake", s.CreateHandshake)
 	mux.HandleFunc("GET /api/handshake/user/{address}", s.ListUserHandshakes)
-	mux.HandleFunc("PUT /api/handshake/{tx_id}", s.UpdateHandshake)
 
 	// Swagger UI.
 	mux.Handle("GET /swagger-api/", swaggerHandler())
