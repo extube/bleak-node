@@ -51,6 +51,39 @@ const docTemplate = `{
                         }
                     }
                 }
+            },
+            "delete": {
+                "description": "Deletes the chat together with every message, participant and queued task tied to it.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "chats"
+                ],
+                "summary": "delete chat",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Chat address",
+                        "name": "address",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.DeleteChatResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
             }
         },
         "/api/chat/{address}/message": {
@@ -966,6 +999,17 @@ const docTemplate = `{
                 },
                 "public_bio": {
                     "type": "string"
+                }
+            }
+        },
+        "server.DeleteChatResponse": {
+            "type": "object",
+            "properties": {
+                "chat": {
+                    "type": "string"
+                },
+                "deleted": {
+                    "type": "boolean"
                 }
             }
         },

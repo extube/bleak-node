@@ -115,6 +115,32 @@ func (s *Server) GetChat(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, ChatResponse{Chat: chat, Participants: parts})
 }
 
+// DeleteChatResponse reports the removal result.
+type DeleteChatResponse struct {
+	Deleted bool   `json:"deleted"`
+	Chat    string `json:"chat"`
+}
+
+// DeleteChat removes a chat with all of its messages, participants and tasks.
+// A later handshake for the same pair starts a brand new chat.
+//
+//	@Summary		delete chat
+//	@Description	Deletes the chat together with every message, participant and queued task tied to it.
+//	@Tags			chats
+//	@Produce		json
+//	@Param			address	path	string	true	"Chat address"
+//	@Success		200	{object}	DeleteChatResponse
+//	@Failure		404	{object}	string
+//	@Router			/api/chat/{address} [delete]
+func (s *Server) DeleteChat(w http.ResponseWriter, r *http.Request) {
+	address := r.PathValue("address")
+	if err := s.db.DeleteChat(r.Context(), address); err != nil {
+		s.mapError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, DeleteChatResponse{Deleted: true, Chat: address})
+}
+
 // ListRoomUserChats returns all chats of a user inside a room.
 //
 //	@Summary		list chats of a room user
