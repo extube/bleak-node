@@ -115,6 +115,58 @@ func (s *Server) GetChat(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, ChatResponse{Chat: chat, Participants: parts})
 }
 
+// ListRoomUserChats returns all chats of a user inside a room.
+//
+//	@Summary		list chats of a room user
+//	@Description	Returns every chat the user participates in. The user must live in the given room.
+//	@Tags			chats
+//	@Produce		json
+//	@Param			room	path		string	true	"Room address"
+//	@Param			address	path		string	true	"User address"
+//	@Success		200		{array}		ChatResponse
+//	@Failure		404		{object}	string
+//	@Router			/api/room/{room}/user/{address}/chat [get]
+func (s *Server) ListRoomUserChats(w http.ResponseWriter, r *http.Request) {
+	chats, err := s.db.ListRoomUserChats(r.Context(), r.PathValue("room"), r.PathValue("address"))
+	if err != nil {
+		s.mapError(w, err)
+		return
+	}
+
+	out := []ChatResponse{}
+	for _, c := range chats {
+		parts, err := s.db.ChatParticipants(r.Context(), c.Address)
+		if err != nil {
+			s.mapError(w, err)
+			return
+		}
+		out = append(out, ChatResponse{Chat: c, Participants: parts})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// ListRoomUserChatMessages returns all messages from a chat of a room user.
+//
+//	@Summary		list messages of a room user chat
+//	@Description	Returns every message of the chat, oldest first. The user must live in the given room and participate in the chat.
+//	@Tags			messages
+//	@Produce		json
+//	@Param			room	path	string	true	"Room address"
+//	@Param			address	path	string	true	"User address"
+//	@Param			chat	path	string	true	"Chat address"
+//	@Success		200	{array}		model.Message
+//	@Failure		404	{object}	string
+//	@Router			/api/room/{room}/user/{address}/chat/{chat}/messages [get]
+func (s *Server) ListRoomUserChatMessages(w http.ResponseWriter, r *http.Request) {
+	msgs, err := s.db.ListRoomUserChatMessages(r.Context(),
+		r.PathValue("room"), r.PathValue("address"), r.PathValue("chat"))
+	if err != nil {
+		s.mapError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, msgs)
+}
+
 // ListChatMessages returns all messages of a chat.
 //
 //	@Summary		list messages of a chat

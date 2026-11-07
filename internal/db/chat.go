@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/extube/bleak-node/internal/model"
@@ -170,4 +171,47 @@ ORDER BY c.created_at DESC, c.address ASC`, user)
 // ChatExists reports whether a chat address is live.
 func (d *DB) ChatExists(ctx context.Context, address string) (bool, error) {
 	return d.exists(ctx, `SELECT EXISTS (SELECT 1 FROM chats WHERE address = ?)`, address)
+}
+
+// ListRoomUserChats returns every chat of a user that lives in the room
+// (non-deleted), newest first.
+func (d *DB) ListRoomUserChats(ctx context.Context, roomAddress, address string) ([]model.Chat, error) {
+	ok, err := d.roomHasUser(ctx, roomAddress, address)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, errors.Join(ErrNotFound, fmt.Errorf("user %q not found in room %q", address, roomAddress))
+	}
+	return d.ListUserChats(ctx, address)
+}
+
+// ListRoomUserChatMessages returns every message of a chat, oldest first,
+// provided the user lives in the room and participates in that chat.
+func (d *DB) ListRoomUserChatMessages(ctx context.Context, roomAddress, address, chatAddress string) ([]model.Message, error) {
+	if ok, err := d.roomHasUser(ctx, roomAddress, address); err != nil {
+		return nil, err
+	} else if !ok {
+		return nil, errors.Join(ErrNotFound, fmt.Errorf("user %q not found in room %q", address, roomAddress))
+	}
+	if ok, err := d.ChatExists(ctx, chatAddress); err != nil {
+		return nil, err
+	} else if !ok {
+		return nil, errors.Join(ErrNotFound, fmt.Errorf("chat %q not found", chatAddress))
+	}
+	if ok, err := d.exists(ctx,
+		`SELECT EXISTS (SELECT 1 FROM participants WHERE chat = ? AND user = ?)`, chatAddress, address); err != nil {
+		return nil, err
+	} else if !ok {
+		return nil, errors.Join(ErrNotFound, fmt.Errorf(
+			"user %q does not participate in chat %q", address, chatAddress))
+	}
+	return d.ListChatMessages(ctx, chatAddress)
+}
+
+// roomHasUser reports whether a non-deleted user belongs to the room.
+func (d *DB) roomHasUser(ctx context.Context, roomAddress, address string) (bool, error) {
+	return d.exists(ctx,
+		`SELECT EXISTS (SELECT 1 FROM users WHERE address = ? AND room = ? AND deleted_at IS NULL)`,
+		address, roomAddress)
 }
