@@ -67,8 +67,6 @@ definitions:
         type: integer
       to_address:
         type: string
-      tx_id:
-        type: string
     type: object
   server.CreateRoomRequest:
     properties:
@@ -85,11 +83,6 @@ definitions:
         type: string
       public_bio:
         type: string
-    type: object
-  server.UpdateHandshakeRequest:
-    properties:
-      status:
-        type: integer
     type: object
   server.UpdateRoomRequest:
     properties:
@@ -120,8 +113,8 @@ paths:
     post:
       consumes:
       - application/json
-      description: Registers a handshake between two existing users. Status must be
-        in {0,1,2,3,4}.
+      description: Registers a handshake between two existing users with a server-generated
+        tx id. Status must be in {0,1,2,3,4}.
       parameters:
       - description: Handshake to create
         in: body
@@ -149,41 +142,6 @@ paths:
           schema:
             type: string
       summary: create handshake
-      tags:
-      - handshakes
-  /api/handshake/{tx_id}:
-    put:
-      consumes:
-      - application/json
-      description: Updates a handshake's status. Must be one of {0,1,2,3,4}.
-      parameters:
-      - description: Handshake tx id
-        in: path
-        name: tx_id
-        required: true
-        type: string
-      - description: New status
-        in: body
-        name: request
-        required: true
-        schema:
-          $ref: '#/definitions/server.UpdateHandshakeRequest'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/model.Handshake'
-        "400":
-          description: Bad Request
-          schema:
-            type: string
-        "404":
-          description: Not Found
-          schema:
-            type: string
-      summary: update handshake
       tags:
       - handshakes
   /api/handshake/user/{address}:

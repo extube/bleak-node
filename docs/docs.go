@@ -20,7 +20,7 @@ const docTemplate = `{
     "paths": {
         "/api/handshake": {
             "post": {
-                "description": "Registers a handshake between two existing users. Status must be in {0,1,2,3,4}.",
+                "description": "Registers a handshake between two existing users with a server-generated tx id. Status must be in {0,1,2,3,4}.",
                 "consumes": [
                     "application/json"
                 ],
@@ -97,59 +97,6 @@ const docTemplate = `{
                             "items": {
                                 "$ref": "#/definitions/model.Handshake"
                             }
-                        }
-                    }
-                }
-            }
-        },
-        "/api/handshake/{tx_id}": {
-            "put": {
-                "description": "Updates a handshake's status. Must be one of {0,1,2,3,4}.",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "handshakes"
-                ],
-                "summary": "update handshake",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Handshake tx id",
-                        "name": "tx_id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "description": "New status",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/server.UpdateHandshakeRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/model.Handshake"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "type": "string"
                         }
                     }
                 }
@@ -661,9 +608,6 @@ const docTemplate = `{
                 },
                 "to_address": {
                     "type": "string"
-                },
-                "tx_id": {
-                    "type": "string"
                 }
             }
         },
@@ -689,14 +633,6 @@ const docTemplate = `{
                 },
                 "public_bio": {
                     "type": "string"
-                }
-            }
-        },
-        "server.UpdateHandshakeRequest": {
-            "type": "object",
-            "properties": {
-                "status": {
-                    "type": "integer"
                 }
             }
         },
