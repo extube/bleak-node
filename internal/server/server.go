@@ -44,6 +44,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/handshake", s.CreateHandshake)
 	mux.HandleFunc("GET /api/handshake/user/{address}", s.ListUserHandshakes)
 
+	// Chats & messages.
+	mux.HandleFunc("POST /api/message", s.SendMessage)
+	mux.HandleFunc("GET /api/user/{address}/chat", s.ListUserChats)
+	mux.HandleFunc("GET /api/chat/{address}", s.GetChat)
+	mux.HandleFunc("GET /api/chat/{address}/message", s.ListChatMessages)
+
 	// Swagger UI.
 	mux.Handle("GET /swagger-api/", swaggerHandler())
 
