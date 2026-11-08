@@ -2,8 +2,13 @@ basePath: /
 definitions:
   model.Handshake:
     properties:
+      created_at:
+        type: string
       from_address:
         example: 0xuser123
+        type: string
+      room:
+        example: 0xroom123
         type: string
       status:
         example: 1
@@ -13,6 +18,38 @@ definitions:
         type: string
       tx_id:
         example: 0xtx42
+        type: string
+      value:
+        example: 1
+        type: integer
+    type: object
+  model.Message:
+    properties:
+      chat:
+        example: 0xchat123
+        type: string
+      content:
+        example: hello there
+        type: string
+      created_at:
+        type: string
+      from:
+        example: 0xuser123
+        type: string
+      to:
+        example: 0xuser456
+        type: string
+      tx_id:
+        example: 0x9f1c0d...
+        type: string
+    type: object
+  model.Participant:
+    properties:
+      chat:
+        example: 0xchat123
+        type: string
+      user:
+        example: 0xuser123
         type: string
     type: object
   model.Room:
@@ -27,6 +64,9 @@ definitions:
       description:
         example: A room for bleak meetings
         type: string
+      max_user:
+        example: 100
+        type: integer
       name:
         example: Meta Room
         type: string
@@ -57,6 +97,28 @@ definitions:
       updated_at:
         type: string
     type: object
+  server.ChatResponse:
+    properties:
+      address:
+        example: 0xchat123
+        type: string
+      created_at:
+        type: string
+      participants:
+        items:
+          $ref: '#/definitions/model.Participant'
+        type: array
+      room:
+        example: 0xroom123
+        type: string
+    type: object
+  server.ClearChatResponse:
+    properties:
+      chat:
+        type: string
+      cleared:
+        type: integer
+    type: object
   server.CreateHandshakeRequest:
     properties:
       from_address:
@@ -65,13 +127,9 @@ definitions:
         type: integer
       to_address:
         type: string
-      tx_id:
-        type: string
     type: object
   server.CreateRoomRequest:
     properties:
-      address:
-        type: string
       description:
         type: string
       name:
@@ -79,8 +137,6 @@ definitions:
     type: object
   server.CreateUserRequest:
     properties:
-      address:
-        type: string
       name:
         type: string
       private_bio:
@@ -88,10 +144,23 @@ definitions:
       public_bio:
         type: string
     type: object
-  server.UpdateHandshakeRequest:
+  server.KickoffResponse:
     properties:
-      status:
+      chat:
+        type: string
+      cleared:
         type: integer
+      speaker:
+        type: string
+    type: object
+  server.SendMessageRequest:
+    properties:
+      content:
+        type: string
+      from:
+        type: string
+      to:
+        type: string
     type: object
   server.UpdateRoomRequest:
     properties:
@@ -118,12 +187,114 @@ info:
   title: bleak-node API
   version: 0.1.0
 paths:
+  /api/chat/{address}:
+    get:
+      description: Returns one chat together with its participants.
+      parameters:
+      - description: Chat address
+        in: path
+        name: address
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.ChatResponse'
+        "404":
+          description: Not Found
+          schema:
+            type: string
+      summary: get chat
+      tags:
+      - chats
+  /api/chat/{address}/kickoff:
+    post:
+      description: Clears the message history of the chat and returns the interaction
+        to the queue. The speaker of the first turn is the user who sent the pair's
+        earliest handshake; the agents then continue automatically until the chat
+        limit.
+      parameters:
+      - description: Chat address
+        in: path
+        name: address
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/server.KickoffResponse'
+        "404":
+          description: Not Found
+          schema:
+            type: string
+      summary: kick off chat
+      tags:
+      - chats
+  /api/chat/{address}/message:
+    delete:
+      description: Deletes every message of the chat. The chat and its participants
+        remain.
+      parameters:
+      - description: Chat address
+        in: path
+        name: address
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.ClearChatResponse'
+        "404":
+          description: Not Found
+          schema:
+            type: string
+      summary: clear chat history
+      tags:
+      - chats
+    get:
+      description: Returns every message in the chat, oldest first.
+      parameters:
+      - description: Chat address
+        in: path
+        name: address
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/model.Message'
+            type: array
+        "404":
+          description: Not Found
+          schema:
+            type: string
+      summary: list messages of a chat
+      tags:
+      - messages
   /api/handshake:
     post:
       consumes:
       - application/json
-      description: Registers a handshake between two existing users. Status must be
-        in {0,1,2,3,4}.
+      description: 'Registers a handshake between two existing users with a server-generated
+        tx id. Both users must live in the same room (the handshake is tied to it).
+        Status must be in {1,2,3,4}; the sender''s room-scoped income must exceed
+        its outcome. A directed pair (from, to) is unique: if that handshake already
+        exists nothing is created and the live handshake is returned with 200 instead
+        of 201. A repeat request for a pair without a live chat (deleted) re-creates
+        the chat.'
       parameters:
       - description: Handshake to create
         in: body
@@ -134,12 +305,20 @@ paths:
       produces:
       - application/json
       responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.Handshake'
         "201":
           description: Created
           schema:
             $ref: '#/definitions/model.Handshake'
         "400":
           description: Bad Request
+          schema:
+            type: string
+        "403":
+          description: Forbidden
           schema:
             type: string
         "404":
@@ -153,30 +332,50 @@ paths:
       summary: create handshake
       tags:
       - handshakes
-  /api/handshake/{tx_id}:
-    put:
-      consumes:
-      - application/json
-      description: Updates a handshake's status. Must be one of {0,1,2,3,4}.
+  /api/handshake/user/{address}:
+    get:
+      description: Returns every handshake where the user is the sender or the receiver,
+        newest first.
       parameters:
-      - description: Handshake tx id
+      - description: User address
         in: path
-        name: tx_id
+        name: address
         required: true
         type: string
-      - description: New status
-        in: body
-        name: request
-        required: true
-        schema:
-          $ref: '#/definitions/server.UpdateHandshakeRequest'
       produces:
       - application/json
       responses:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/model.Handshake'
+            items:
+              $ref: '#/definitions/model.Handshake'
+            type: array
+      summary: list handshakes of a user
+      tags:
+      - handshakes
+  /api/message:
+    post:
+      consumes:
+      - application/json
+      description: 'Posts a message from one user to another inside their chat. The
+        chat must exist: it is created automatically once handshakes exist in both
+        directions (A -> B and B -> A) between the two users. Content is limited to
+        255 symbols, the tx id and created_at are generated by the server.'
+      parameters:
+      - description: Message to send
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/server.SendMessageRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/model.Message'
         "400":
           description: Bad Request
           schema:
@@ -185,9 +384,13 @@ paths:
           description: Not Found
           schema:
             type: string
-      summary: update handshake
+        "409":
+          description: Conflict
+          schema:
+            type: string
+      summary: send message
       tags:
-      - handshakes
+      - messages
   /api/room:
     get:
       description: Returns all non-deleted rooms.
@@ -206,7 +409,7 @@ paths:
     post:
       consumes:
       - application/json
-      description: Creates a room with a unique address.
+      description: Creates a room with a server-generated unique address.
       parameters:
       - description: Room to create
         in: body
@@ -462,4 +665,92 @@ paths:
       summary: update user
       tags:
       - users
+  /api/room/{room}/user/{address}/chat:
+    get:
+      description: Returns every chat the user participates in. The user must live
+        in the given room.
+      parameters:
+      - description: Room address
+        in: path
+        name: room
+        required: true
+        type: string
+      - description: User address
+        in: path
+        name: address
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/server.ChatResponse'
+            type: array
+        "404":
+          description: Not Found
+          schema:
+            type: string
+      summary: list chats of a room user
+      tags:
+      - chats
+  /api/room/{room}/user/{address}/chat/{chat}/messages:
+    get:
+      description: Returns every message of the chat, oldest first. The user must
+        live in the given room and participate in the chat.
+      parameters:
+      - description: Room address
+        in: path
+        name: room
+        required: true
+        type: string
+      - description: User address
+        in: path
+        name: address
+        required: true
+        type: string
+      - description: Chat address
+        in: path
+        name: chat
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/model.Message'
+            type: array
+        "404":
+          description: Not Found
+          schema:
+            type: string
+      summary: list messages of a room user chat
+      tags:
+      - messages
+  /api/user/{address}/chat:
+    get:
+      description: Returns every chat the user participates in, newest first.
+      parameters:
+      - description: User address
+        in: path
+        name: address
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/server.ChatResponse'
+            type: array
+      summary: list chats of a user
+      tags:
+      - chats
 swagger: "2.0"

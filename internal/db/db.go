@@ -3,7 +3,9 @@ package db
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -19,6 +21,8 @@ var (
 	ErrNotFound = errors.New("not found")
 	ErrConflict = errors.New("conflict")
 	ErrInvalid  = errors.New("invalid")
+	// ErrBalance signals the sender has no positive spendable balance.
+	ErrBalance = errors.New("insufficient balance")
 )
 
 // DB wraps *sql.DB with bleak-node specific helpers.
@@ -60,6 +64,7 @@ CREATE TABLE IF NOT EXISTS rooms (
 	address     TEXT PRIMARY KEY,
 	name        TEXT NOT NULL CHECK (length(name) <= 32),
 	description TEXT NOT NULL DEFAULT '' CHECK (length(description) <= 120),
+	max_user    INTEGER NOT NULL DEFAULT 100 CHECK (max_user > 0),
 	created_at  TEXT NOT NULL,
 	updated_at  TEXT NOT NULL,
 	deleted_at  TEXT
@@ -69,8 +74,8 @@ CREATE TABLE IF NOT EXISTS users (
 	address     TEXT PRIMARY KEY,
 	name        TEXT NOT NULL,
 	room        TEXT NOT NULL REFERENCES rooms(address),
-	public_bio  TEXT NOT NULL DEFAULT '' CHECK (length(public_bio) <= 64),
-	private_bio TEXT NOT NULL DEFAULT '' CHECK (length(private_bio) <= 64),
+	public_bio  TEXT NOT NULL DEFAULT '' CHECK (length(public_bio) <= 255),
+	private_bio TEXT NOT NULL DEFAULT '' CHECK (length(private_bio) <= 255),
 	created_at  TEXT NOT NULL,
 	updated_at  TEXT NOT NULL,
 	deleted_at  TEXT
@@ -78,15 +83,375 @@ CREATE TABLE IF NOT EXISTS users (
 
 CREATE INDEX IF NOT EXISTS idx_users_room ON users(room);
 
+-- from_address may be a room (system "welcome" handshake), so foreign keys
+-- are intentionally not declared here; the application validates addresses.
 CREATE TABLE IF NOT EXISTS handshakes (
 	tx_id        TEXT PRIMARY KEY,
-	from_address TEXT NOT NULL REFERENCES users(address),
-	to_address   TEXT NOT NULL REFERENCES users(address),
-	status       INTEGER NOT NULL CHECK (status IN (0, 1, 2, 3, 4))
+	from_address TEXT NOT NULL,
+	to_address   TEXT NOT NULL,
+	room         TEXT NOT NULL DEFAULT '',
+	status       INTEGER NOT NULL CHECK (status IN (1, 2, 3, 4)),
+	value        INTEGER NOT NULL CHECK (value > 0),
+	created_at   TEXT NOT NULL
 );
+
+-- Chats are created automatically once both handshake directions exist.
+-- They always live in the same room as their participants.
+CREATE TABLE IF NOT EXISTS chats (
+	address    TEXT PRIMARY KEY,
+	room       TEXT NOT NULL DEFAULT '',
+	created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS participants (
+	chat TEXT NOT NULL REFERENCES chats(address),
+	user TEXT NOT NULL REFERENCES users(address),
+	PRIMARY KEY (chat, user)
+);
+
+CREATE INDEX IF NOT EXISTS idx_participants_user ON participants(user);
+
+CREATE TABLE IF NOT EXISTS messages (
+	tx_id      TEXT PRIMARY KEY,
+	"from"     TEXT NOT NULL REFERENCES users(address),
+	"to"       TEXT NOT NULL REFERENCES users(address),
+	created_at TEXT NOT NULL,
+	content    TEXT NOT NULL CHECK (length(content) <= 255),
+	chat       TEXT NOT NULL REFERENCES chats(address)
+);
+
+CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat);
+
+-- Lightweight queue over SQLite. The agent worker consumes pending rows.
+CREATE TABLE IF NOT EXISTS events (
+	id           INTEGER PRIMARY KEY AUTOINCREMENT,
+	type         TEXT NOT NULL,
+	chat         TEXT NOT NULL REFERENCES chats(address),
+	speaker      TEXT NOT NULL,
+	listener     TEXT NOT NULL,
+	status       TEXT NOT NULL DEFAULT 'pending',
+	attempts     INTEGER NOT NULL DEFAULT 0,
+	error        TEXT NOT NULL DEFAULT '',
+	created_at   TEXT NOT NULL,
+	processed_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_events_status ON events(status, id);
 `
 	if _, err := d.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("migrate: %w", err)
+	}
+	// In-place migrations for older databases.
+	if err := d.ensureColumn(ctx, "rooms", "max_user", "INTEGER NOT NULL DEFAULT 100"); err != nil {
+		return err
+	}
+	if err := d.ensureColumn(ctx, "handshakes", "created_at", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := d.ensureColumn(ctx, "handshakes", "value", "INTEGER NOT NULL DEFAULT 1"); err != nil {
+		return err
+	}
+	// Room-scoping: users interact only inside one room, so handshakes and
+	// chats are tied to it. Older rows get the room backfilled from users.
+	if err := d.ensureColumn(ctx, "handshakes", "room", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := d.ensureColumn(ctx, "chats", "room", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if _, err := d.ExecContext(ctx, `
+UPDATE handshakes
+SET room = COALESCE(
+	(SELECT u.room FROM users u WHERE u.address = handshakes.to_address),
+	(SELECT u.room FROM users u WHERE u.address = handshakes.from_address), '')
+WHERE room = ''`); err != nil {
+		return fmt.Errorf("backfill handshake rooms: %w", err)
+	}
+	if _, err := d.ExecContext(ctx, `
+UPDATE chats
+SET room = COALESCE(
+	(SELECT u.room FROM users u WHERE u.address = (
+		SELECT p.user FROM participants p WHERE p.chat = chats.address LIMIT 1)), '')
+WHERE room = ''`); err != nil {
+		return fmt.Errorf("backfill chat rooms: %w", err)
+	}
+	// Older handshakes tables had FOREIGN KEYS to users; rooms now act as
+	// senders of the welcome handshake, so the table is rebuilt without them.
+	if err := d.rebuildHandshakesWithoutFK(ctx); err != nil {
+		return err
+	}
+	// Richer agent personas: bio limit was raised from 64 to 255 symbols.
+	return d.rebuildUsersWithLongBio(ctx)
+}
+
+// rebuildUsersWithLongBio recreates the users table when its bio CHECK
+// constraints still cap the bios at 64 symbols (SQLite cannot alter a
+// constraint in place). It also repairs a half-applied rename left behind by
+// an interrupted older run (users_old present).
+func (d *DB) rebuildUsersWithLongBio(ctx context.Context) error {
+	// Foreign keys must be off while renaming: without this, SQLite rewrites
+	// the FKs of referencing tables (participants, messages) to users_old
+	// and the later DROP fails with constraint errors. legacy_alter_table
+	// keeps the referencing tables pointing at the final "users" name.
+	for _, p := range []string{`PRAGMA foreign_keys=OFF`, `PRAGMA legacy_alter_table=ON`} {
+		if _, err := d.ExecContext(ctx, p); err != nil {
+			return fmt.Errorf("%s: %w", p, err)
+		}
+	}
+	defer func() {
+		_, _ = d.ExecContext(ctx, `PRAGMA legacy_alter_table=OFF`)
+		_, _ = d.ExecContext(ctx, `PRAGMA foreign_keys=ON`)
+	}()
+
+	var (
+		curr, old sql.NullString
+	)
+	if err := d.QueryRowContext(ctx,
+		`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'users'`).Scan(&curr); err != nil {
+		return fmt.Errorf("sqlite_master users: %w", err)
+	}
+	if err := d.QueryRowContext(ctx,
+		`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'users_old'`).Scan(&old); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("sqlite_master users_old: %w", err)
+	}
+
+	if curr.Valid && strings.Contains(curr.String, "length(public_bio) <= 255") && !old.Valid {
+		// Already at the long-bio schema and no leftover.
+		return nil
+	}
+
+	if !curr.Valid || old.Valid {
+		// Leftover from an interrupted rename: recreate the long-bio schema
+		// fresh and copy everything back from users_old.
+		if !curr.Valid {
+			if _, err := d.ExecContext(ctx,
+				`CREATE TABLE users (
+		address     TEXT PRIMARY KEY,
+		name        TEXT NOT NULL,
+		room        TEXT NOT NULL REFERENCES rooms(address),
+		public_bio  TEXT NOT NULL DEFAULT '' CHECK (length(public_bio) <= 255),
+		private_bio TEXT NOT NULL DEFAULT '' CHECK (length(private_bio) <= 255),
+		created_at  TEXT NOT NULL,
+		updated_at  TEXT NOT NULL,
+		deleted_at  TEXT
+	)`); err != nil {
+				return fmt.Errorf("create users: %w", err)
+			}
+		}
+		if _, err := d.ExecContext(ctx, `
+INSERT OR REPLACE INTO users (address, name, room, public_bio, private_bio, created_at, updated_at, deleted_at)
+SELECT address, name, room, public_bio, private_bio, created_at, updated_at, deleted_at FROM users_old`); err != nil {
+			return fmt.Errorf("copy users_old back: %w", err)
+		}
+		if _, err := d.ExecContext(ctx, `DROP TABLE users_old`); err != nil {
+			return fmt.Errorf("drop users_old: %w", err)
+		}
+		// The referencing tables may still carry FKs that point at
+		// users_old (renamed under a different pragma mode): rebuild them.
+		if err := d.repairUsersReference(ctx); err != nil {
+			return err
+		}
+	} else {
+		// Regular upgrade: 64-legacy schema present.
+		const rebuild = `
+ALTER TABLE users RENAME TO users_old;
+
+CREATE TABLE users (
+	address     TEXT PRIMARY KEY,
+	name        TEXT NOT NULL,
+	room        TEXT NOT NULL REFERENCES rooms(address),
+	public_bio  TEXT NOT NULL DEFAULT '' CHECK (length(public_bio) <= 255),
+	private_bio TEXT NOT NULL DEFAULT '' CHECK (length(private_bio) <= 255),
+	created_at  TEXT NOT NULL,
+	updated_at  TEXT NOT NULL,
+	deleted_at  TEXT
+);
+
+INSERT INTO users (address, name, room, public_bio, private_bio, created_at, updated_at, deleted_at)
+SELECT address, name, room, public_bio, private_bio, created_at, updated_at, deleted_at
+FROM users_old;
+
+DROP TABLE users_old;
+`
+		if _, err := d.ExecContext(ctx, rebuild); err != nil {
+			return fmt.Errorf("rebuild users: %w", err)
+		}
+	}
+
+	if _, err := d.ExecContext(ctx,
+		`CREATE INDEX IF NOT EXISTS idx_users_room ON users(room)`); err != nil {
+		return fmt.Errorf("rebuild users index: %w", err)
+	}
+	// Also repair references left over from an earlier partial run even
+	// when users_old itself is already gone.
+	if err := d.repairUsersReference(ctx); err != nil {
+		return err
+	}
+	if err := d.vacuum(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
+// repairUsersReference rebuilds tables that still hold foreign keys pointing
+// at users_old so they reference users again.
+func (d *DB) repairUsersReference(ctx context.Context) error {
+	const participantsDDL = `
+CREATE TABLE participants (
+	chat TEXT NOT NULL REFERENCES chats(address),
+	user TEXT NOT NULL REFERENCES users(address),
+	PRIMARY KEY (chat, user)
+)`
+	const messagesDDL = `
+CREATE TABLE messages (
+	tx_id      TEXT PRIMARY KEY,
+	"from"     TEXT NOT NULL REFERENCES users(address),
+	"to"       TEXT NOT NULL REFERENCES users(address),
+	created_at TEXT NOT NULL,
+	content    TEXT NOT NULL CHECK (length(content) <= 255),
+	chat       TEXT NOT NULL REFERENCES chats(address)
+)`
+	if err := d.rebuildTableIfFK(ctx, "participants", participantsDDL); err != nil {
+		return err
+	}
+	if err := d.rebuildTableIfFK(ctx, "messages", messagesDDL); err != nil {
+		return err
+	}
+	indexes := []string{
+		`CREATE INDEX IF NOT EXISTS idx_participants_user ON participants(user)`,
+		`CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat)`,
+	}
+	for _, create := range indexes {
+		if _, err := d.ExecContext(ctx, create); err != nil {
+			return fmt.Errorf("recreate index: %w", err)
+		}
+	}
+	return nil
+}
+
+// rebuildTableIfFK recreates a table (same columns, new DDL) when its stored
+// CREATE statement still references users_old in a foreign key.
+func (d *DB) rebuildTableIfFK(ctx context.Context, table, ddl string) error {
+	var sqlText sql.NullString
+	if err := d.QueryRowContext(ctx,
+		fmt.Sprintf(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = '%s'`, table)).Scan(&sqlText); err != nil {
+		return fmt.Errorf("sqlite_master %s: %w", table, err)
+	}
+	current := sqlText.String
+	if !sqlText.Valid || !strings.Contains(current, `"users_old"`) { // #nosec G201 -- table name is an internal constant.
+		return nil
+	}
+
+	const rebuild = `
+ALTER TABLE %s RENAME TO %s_old;
+
+%s;
+
+INSERT INTO "%s" SELECT * FROM "%s_old";
+
+DROP TABLE "%s_old";
+`
+	// #nosec G201 -- identifiers are internal constants, not user input.
+	if _, err := d.ExecContext(ctx, fmt.Sprintf(rebuild, table, table, ddl, table, table, table)); err != nil {
+		return fmt.Errorf("rebuild %s: %w", table, err)
+	}
+	return nil
+}
+
+// vacuum compacts the database file after table rebuilds.
+func (d *DB) vacuum(ctx context.Context) error {
+	if _, err := d.ExecContext(ctx, `VACUUM`); err != nil {
+		return fmt.Errorf("vacuum: %w", err)
+	}
+	return nil
+}
+
+// rebuildHandshakesWithoutFK recreates the handshakes table without foreign
+// keys when any are present (SQLite cannot drop a constraint in place).
+func (d *DB) rebuildHandshakesWithoutFK(ctx context.Context) error {
+	var fkCount int
+	rows, err := d.QueryContext(ctx, "PRAGMA foreign_key_list(handshakes)")
+	if err != nil {
+		return fmt.Errorf("foreign_key_list: %w", err)
+	}
+	for rows.Next() {
+		fkCount++
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_ = rows.Close()
+	if fkCount == 0 {
+		return nil
+	}
+
+	const rebuild = `
+ALTER TABLE handshakes RENAME TO handshakes_old;
+
+CREATE TABLE handshakes (
+	tx_id        TEXT PRIMARY KEY,
+	from_address TEXT NOT NULL,
+	to_address   TEXT NOT NULL,
+	room         TEXT NOT NULL DEFAULT '',
+	status       INTEGER NOT NULL CHECK (status IN (1, 2, 3, 4)),
+	value        INTEGER NOT NULL CHECK (value > 0),
+	created_at   TEXT NOT NULL
+);
+
+-- Legacy rows may have status 0 or empty created_at; normalize them on the way over.
+INSERT INTO handshakes (tx_id, from_address, to_address, status, value, created_at)
+SELECT tx_id, from_address, to_address,
+       CASE WHEN status = 0 THEN 1 ELSE status END,
+       COALESCE(value, 1),
+       CASE WHEN created_at IS NULL OR created_at = '' THEN '' ELSE created_at END
+FROM handshakes_old;
+
+DROP TABLE handshakes_old;
+`
+	if _, err := d.ExecContext(ctx, rebuild); err != nil {
+		return fmt.Errorf("rebuild handshakes: %w", err)
+	}
+	// The empty created_at rows from very old schemas get a sensible stamp.
+	if _, err := d.ExecContext(ctx,
+		`UPDATE handshakes
+		 SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+		 WHERE created_at = ''`); err != nil {
+		return fmt.Errorf("stamp legacy handshakes: %w", err)
+	}
+	return nil
+}
+
+// ensureColumn adds a column to a table when it is not present yet.
+func (d *DB) ensureColumn(ctx context.Context, table, column, decl string) error {
+	rows, err := d.QueryContext(ctx, "PRAGMA table_info("+table+")")
+	if err != nil {
+		return fmt.Errorf("table_info %s: %w", table, err)
+	}
+	defer rows.Close()
+
+	var found bool
+	for rows.Next() {
+		var (
+			cid, notnull, pk int
+			name, ctype      string
+			dflt             sql.NullString
+		)
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dflt, &pk); err != nil {
+			return err
+		}
+		if name == column {
+			found = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if found {
+		return nil
+	}
+	// #nosec G201 -- table/column names are compile-time constants, not user input.
+	if _, err := d.ExecContext(ctx, fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, decl)); err != nil {
+		return fmt.Errorf("add column %s.%s: %w", table, column, err)
 	}
 	return nil
 }
@@ -94,6 +459,20 @@ CREATE TABLE IF NOT EXISTS handshakes (
 // isUnique reports whether err is a SQLite unique-constraint violation.
 func isUnique(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "UNIQUE constraint failed")
+}
+
+// newAddress generates a unique random address of the form "0x" + hex(nBytes).
+// The caller is expected to retry on ErrConflict in the (astronomically
+// unlikely) event of a collision.
+func newAddress(nBytes int) string {
+	buf := make([]byte, nBytes)
+	_, _ = rand.Read(buf)
+	return "0x" + hex.EncodeToString(buf)
+}
+
+// newTxID generates a tx id of the form "0x" + 64 hex chars (256 bits).
+func newTxID() string {
+	return newAddress(32)
 }
 
 // parseTS parses an RFC3339 timestamp string; zero time when empty/invalid.
