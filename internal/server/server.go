@@ -42,7 +42,17 @@ func (s *Server) Handler() http.Handler {
 
 	// Handshakes.
 	mux.HandleFunc("POST /api/handshake", s.CreateHandshake)
-	mux.HandleFunc("PUT /api/handshake/{tx_id}", s.UpdateHandshake)
+	mux.HandleFunc("GET /api/handshake/user/{address}", s.ListUserHandshakes)
+
+	// Chats & messages.
+	mux.HandleFunc("POST /api/message", s.SendMessage)
+	mux.HandleFunc("GET /api/user/{address}/chat", s.ListUserChats)
+	mux.HandleFunc("GET /api/room/{room}/user/{address}/chat", s.ListRoomUserChats)
+	mux.HandleFunc("GET /api/room/{room}/user/{address}/chat/{chat}/messages", s.ListRoomUserChatMessages)
+	mux.HandleFunc("GET /api/chat/{address}", s.GetChat)
+	mux.HandleFunc("DELETE /api/chat/{address}/message", s.ClearChatMessages)
+	mux.HandleFunc("POST /api/chat/{address}/kickoff", s.ChatKickoff)
+	mux.HandleFunc("GET /api/chat/{address}/message", s.ListChatMessages)
 
 	// Swagger UI.
 	mux.Handle("GET /swagger-api/", swaggerHandler())
@@ -100,6 +110,8 @@ func (s *Server) mapError(w http.ResponseWriter, err error) {
 		respond(w, http.StatusNotFound, message(err))
 	case errors.Is(err, db.ErrConflict):
 		respond(w, http.StatusConflict, message(err))
+	case errors.Is(err, db.ErrBalance):
+		respond(w, http.StatusForbidden, message(err))
 	default:
 		respond(w, http.StatusInternalServerError, err.Error())
 	}

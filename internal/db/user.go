@@ -10,14 +10,35 @@ import (
 	"github.com/extube/bleak-node/internal/model"
 )
 
-// CreateUser inserts a user linked to the given room.
+// CreateUser inserts a user linked to the given room and atomically creates
+// the system "welcome" handshake (room -> user, value 10) so the user starts
+// with a positive balance. Rooms have a max_user capacity.
 func (d *DB) CreateUser(ctx context.Context, roomAddress string, user *model.User) error {
-	ok, err := d.RoomExists(ctx, roomAddress)
+	tx, err := d.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	if !ok {
+	defer func() { _ = tx.Rollback() }()
+
+	var roomMax int
+	err = tx.QueryRowContext(ctx,
+		`SELECT max_user FROM rooms WHERE address = ? AND deleted_at IS NULL`, roomAddress).Scan(&roomMax)
+	if errors.Is(err, sql.ErrNoRows) {
 		return errors.Join(ErrNotFound, fmt.Errorf("room %q not found", roomAddress))
+	}
+	if err != nil {
+		return err
+	}
+
+	// Enforce room capacity.
+	var cnt int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM users WHERE room = ? AND deleted_at IS NULL`, roomAddress).Scan(&cnt); err != nil {
+		return err
+	}
+	if cnt >= roomMax {
+		return errors.Join(ErrConflict, fmt.Errorf(
+			"room %q is full: %d users of max_user %d", roomAddress, cnt, roomMax))
 	}
 
 	now := time.Now().UTC()
@@ -25,16 +46,34 @@ func (d *DB) CreateUser(ctx context.Context, roomAddress string, user *model.Use
 	user.CreatedAt = now
 	user.UpdatedAt = now
 
-	_, err = d.ExecContext(ctx,
-		`INSERT INTO users (address, name, room, public_bio, private_bio, created_at, updated_at, deleted_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`,
-		user.Address, user.Name, roomAddress, user.PublicBio, user.PrivateBio,
-		user.CreatedAt.Format(time.RFC3339), user.UpdatedAt.Format(time.RFC3339),
-	)
-	if isUnique(err) {
-		return errors.Join(ErrConflict, err)
+	// Address is generated server-side; retry on the unlikely collision.
+	inserted := false
+	for attempt := 0; attempt < 3; attempt++ {
+		user.Address = newAddress(16)
+		_, err = tx.ExecContext(ctx,
+			`INSERT INTO users (address, name, room, public_bio, private_bio, created_at, updated_at, deleted_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`,
+			user.Address, user.Name, roomAddress, user.PublicBio, user.PrivateBio,
+			user.CreatedAt.Format(time.RFC3339), user.UpdatedAt.Format(time.RFC3339),
+		)
+		if isUnique(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		inserted = true
+		break
 	}
-	return err
+	if !inserted {
+		return errors.Join(ErrConflict, errors.New("could not generate unique user address"))
+	}
+
+	// Welcome handshake: from the room to the new user, value 10.
+	if _, err := createSystemHandshake(ctx, tx, roomAddress, user.Address); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // ListRoomUsers returns all non-deleted users of a room.
@@ -73,6 +112,22 @@ func (d *DB) GetUser(ctx context.Context, roomAddress, address string) (model.Us
 // UserExists reports whether a non-deleted user with the given address exists.
 func (d *DB) UserExists(ctx context.Context, address string) (bool, error) {
 	return d.exists(ctx, `SELECT EXISTS (SELECT 1 FROM users WHERE address = ? AND deleted_at IS NULL)`, address)
+}
+
+// UserByAddress returns a user by address regardless of its room (also
+// soft-deleted rows: the agent worker needs the bios even then).
+func (d *DB) UserByAddress(ctx context.Context, address string) (model.User, bool, error) {
+	row := d.QueryRowContext(ctx,
+		`SELECT address, name, room, public_bio, private_bio, created_at, updated_at, deleted_at
+		 FROM users WHERE address = ?`, address)
+	user, err := scanUser(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.User{}, false, nil
+	}
+	if err != nil {
+		return model.User{}, false, err
+	}
+	return user, true, nil
 }
 
 // UpdateUser updates name/bios of a non-deleted user inside the given room.

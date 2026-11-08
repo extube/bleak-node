@@ -11,9 +11,150 @@
     },
     "basePath": "/",
     "paths": {
+        "/api/chat/{address}": {
+            "get": {
+                "description": "Returns one chat together with its participants.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "chats"
+                ],
+                "summary": "get chat",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Chat address",
+                        "name": "address",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.ChatResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/chat/{address}/kickoff": {
+            "post": {
+                "description": "Clears the message history of the chat and returns the interaction to the queue. The speaker of the first turn is the user who sent the pair's earliest handshake; the agents then continue automatically until the chat limit.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "chats"
+                ],
+                "summary": "kick off chat",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Chat address",
+                        "name": "address",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/server.KickoffResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/chat/{address}/message": {
+            "get": {
+                "description": "Returns every message in the chat, oldest first.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "messages"
+                ],
+                "summary": "list messages of a chat",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Chat address",
+                        "name": "address",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/model.Message"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "description": "Deletes every message of the chat. The chat and its participants remain.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "chats"
+                ],
+                "summary": "clear chat history",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Chat address",
+                        "name": "address",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.ClearChatResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/api/handshake": {
             "post": {
-                "description": "Registers a handshake between two existing users. Status must be in {0,1,2,3,4}.",
+                "description": "Registers a handshake between two existing users with a server-generated tx id. Both users must live in the same room (the handshake is tied to it). Status must be in {1,2,3,4}; the sender's room-scoped income must exceed its outcome. A directed pair (from, to) is unique: if that handshake already exists nothing is created and the live handshake is returned with 200 instead of 201. A repeat request for a pair without a live chat (deleted) re-creates the chat.",
                 "consumes": [
                     "application/json"
                 ],
@@ -36,6 +177,12 @@
                     }
                 ],
                 "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/model.Handshake"
+                        }
+                    },
                     "201": {
                         "description": "Created",
                         "schema": {
@@ -44,6 +191,12 @@
                     },
                     "400": {
                         "description": "Bad Request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
                         "schema": {
                             "type": "string"
                         }
@@ -63,9 +216,41 @@
                 }
             }
         },
-        "/api/handshake/{tx_id}": {
-            "put": {
-                "description": "Updates a handshake's status. Must be one of {0,1,2,3,4}.",
+        "/api/handshake/user/{address}": {
+            "get": {
+                "description": "Returns every handshake where the user is the sender or the receiver, newest first.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "handshakes"
+                ],
+                "summary": "list handshakes of a user",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "User address",
+                        "name": "address",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/model.Handshake"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/message": {
+            "post": {
+                "description": "Posts a message from one user to another inside their chat. The chat must exist: it is created automatically once handshakes exist in both directions (A -\u003e B and B -\u003e A) between the two users. Content is limited to 255 symbols, the tx id and created_at are generated by the server.",
                 "consumes": [
                     "application/json"
                 ],
@@ -73,32 +258,25 @@
                     "application/json"
                 ],
                 "tags": [
-                    "handshakes"
+                    "messages"
                 ],
-                "summary": "update handshake",
+                "summary": "send message",
                 "parameters": [
                     {
-                        "type": "string",
-                        "description": "Handshake tx id",
-                        "name": "tx_id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "description": "New status",
+                        "description": "Message to send",
                         "name": "request",
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/server.UpdateHandshakeRequest"
+                            "$ref": "#/definitions/server.SendMessageRequest"
                         }
                     }
                 ],
                 "responses": {
-                    "200": {
-                        "description": "OK",
+                    "201": {
+                        "description": "Created",
                         "schema": {
-                            "$ref": "#/definitions/model.Handshake"
+                            "$ref": "#/definitions/model.Message"
                         }
                     },
                     "400": {
@@ -109,6 +287,12 @@
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
                             "type": "string"
                         }
@@ -139,7 +323,7 @@
                 }
             },
             "post": {
-                "description": "Creates a room with a unique address.",
+                "description": "Creates a room with a server-generated unique address.",
                 "consumes": [
                     "application/json"
                 ],
@@ -524,15 +708,151 @@
                     }
                 }
             }
+        },
+        "/api/room/{room}/user/{address}/chat": {
+            "get": {
+                "description": "Returns every chat the user participates in. The user must live in the given room.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "chats"
+                ],
+                "summary": "list chats of a room user",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Room address",
+                        "name": "room",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "User address",
+                        "name": "address",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/server.ChatResponse"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/room/{room}/user/{address}/chat/{chat}/messages": {
+            "get": {
+                "description": "Returns every message of the chat, oldest first. The user must live in the given room and participate in the chat.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "messages"
+                ],
+                "summary": "list messages of a room user chat",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Room address",
+                        "name": "room",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "User address",
+                        "name": "address",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Chat address",
+                        "name": "chat",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/model.Message"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/user/{address}/chat": {
+            "get": {
+                "description": "Returns every chat the user participates in, newest first.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "chats"
+                ],
+                "summary": "list chats of a user",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "User address",
+                        "name": "address",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/server.ChatResponse"
+                            }
+                        }
+                    }
+                }
+            }
         }
     },
     "definitions": {
         "model.Handshake": {
             "type": "object",
             "properties": {
+                "created_at": {
+                    "type": "string"
+                },
                 "from_address": {
                     "type": "string",
                     "example": "0xuser123"
+                },
+                "room": {
+                    "type": "string",
+                    "example": "0xroom123"
                 },
                 "status": {
                     "type": "integer",
@@ -545,6 +865,51 @@
                 "tx_id": {
                     "type": "string",
                     "example": "0xtx42"
+                },
+                "value": {
+                    "type": "integer",
+                    "example": 1
+                }
+            }
+        },
+        "model.Message": {
+            "type": "object",
+            "properties": {
+                "chat": {
+                    "type": "string",
+                    "example": "0xchat123"
+                },
+                "content": {
+                    "type": "string",
+                    "example": "hello there"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "from": {
+                    "type": "string",
+                    "example": "0xuser123"
+                },
+                "to": {
+                    "type": "string",
+                    "example": "0xuser456"
+                },
+                "tx_id": {
+                    "type": "string",
+                    "example": "0x9f1c0d..."
+                }
+            }
+        },
+        "model.Participant": {
+            "type": "object",
+            "properties": {
+                "chat": {
+                    "type": "string",
+                    "example": "0xchat123"
+                },
+                "user": {
+                    "type": "string",
+                    "example": "0xuser123"
                 }
             }
         },
@@ -564,6 +929,10 @@
                 "description": {
                     "type": "string",
                     "example": "A room for bleak meetings"
+                },
+                "max_user": {
+                    "type": "integer",
+                    "example": 100
                 },
                 "name": {
                     "type": "string",
@@ -608,6 +977,39 @@
                 }
             }
         },
+        "server.ChatResponse": {
+            "type": "object",
+            "properties": {
+                "address": {
+                    "type": "string",
+                    "example": "0xchat123"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "participants": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.Participant"
+                    }
+                },
+                "room": {
+                    "type": "string",
+                    "example": "0xroom123"
+                }
+            }
+        },
+        "server.ClearChatResponse": {
+            "type": "object",
+            "properties": {
+                "chat": {
+                    "type": "string"
+                },
+                "cleared": {
+                    "type": "integer"
+                }
+            }
+        },
         "server.CreateHandshakeRequest": {
             "type": "object",
             "properties": {
@@ -619,18 +1021,12 @@
                 },
                 "to_address": {
                     "type": "string"
-                },
-                "tx_id": {
-                    "type": "string"
                 }
             }
         },
         "server.CreateRoomRequest": {
             "type": "object",
             "properties": {
-                "address": {
-                    "type": "string"
-                },
                 "description": {
                     "type": "string"
                 },
@@ -642,9 +1038,6 @@
         "server.CreateUserRequest": {
             "type": "object",
             "properties": {
-                "address": {
-                    "type": "string"
-                },
                 "name": {
                     "type": "string"
                 },
@@ -656,11 +1049,31 @@
                 }
             }
         },
-        "server.UpdateHandshakeRequest": {
+        "server.KickoffResponse": {
             "type": "object",
             "properties": {
-                "status": {
+                "chat": {
+                    "type": "string"
+                },
+                "cleared": {
                     "type": "integer"
+                },
+                "speaker": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.SendMessageRequest": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string"
+                },
+                "from": {
+                    "type": "string"
+                },
+                "to": {
+                    "type": "string"
                 }
             }
         },
