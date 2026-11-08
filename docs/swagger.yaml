@@ -108,8 +108,16 @@ definitions:
         items:
           $ref: '#/definitions/model.Participant'
         type: array
+      phase:
+        example: networking
+        type: string
+      phase_started_at:
+        type: string
       room:
         example: 0xroom123
+        type: string
+      scenario:
+        example: ai-future
         type: string
     type: object
   server.ClearChatResponse:

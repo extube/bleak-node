@@ -39,11 +39,17 @@ type Handshake struct {
 
 // Chat links two users who share messages. Created automatically once
 // handshakes exist in both directions (A -> B and B -> A). Chats live in
-// the same room as their participants.
+// the same room as their participants. Every chat carries a scenario key
+// (the debate theme of part 2) and a conversation phase; phase_started_at
+// marks the moment part 2 began, so the networking part stays visible in
+// the API while the debate prompts only replay part 2 messages.
 type Chat struct {
-	Address   string    `json:"address" example:"0xchat123"`
-	Room      string    `json:"room" example:"0xroom123"`
-	CreatedAt time.Time `json:"created_at"`
+	Address        string     `json:"address" example:"0xchat123"`
+	Room           string     `json:"room" example:"0xroom123"`
+	Scenario       string     `json:"scenario" example:"ai-future"`
+	Phase          string     `json:"phase" example:"networking"`
+	PhaseStartedAt *time.Time `json:"phase_started_at"`
+	CreatedAt      time.Time  `json:"created_at"`
 }
 
 // Participant is one of the two chat members; unique key is (chat, user).
@@ -90,11 +96,28 @@ const (
 	EventChatInteract = "chat.interact"
 )
 
+// Chat phase names: part 1 is the networking conversation (agents follow
+// the networking checklist), part 2 the abstract theme debate that follows
+// a context boundary.
+const (
+	// PhaseNetworking is the opening phase: agents introduce themselves
+	// naturally, look for shared interests and build human trust.
+	PhaseNetworking = "networking"
+	// PhaseDebate is the second phase: a themed discussion after the
+	// conversation history of part 1 has been sealed from the prompts.
+	PhaseDebate = "debate"
+)
+
 // Agent interaction defaults.
 const (
-	// DefaultChatMaxMessages is the default number of messages after which a
-	// chat is considered over the limit and the prompts ask for farewell.
-	DefaultChatMaxMessages = 20
+	// UserMessageLimit bounds the messages ONE participant writes in a
+	// chat, the farewell included: no user sends more than
+	// DefaultUserMessageLimit messages, so a dialog holds no more than
+	// two such quotas in total.
+	MinUserMessageLimit = 6
+	MaxUserMessageLimit = 12
+	// DefaultUserMessageLimit is the fallback when the operator sets nothing.
+	DefaultUserMessageLimit = 12
 )
 
 // Balance constants for the handshake economy.
