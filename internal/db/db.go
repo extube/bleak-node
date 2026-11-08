@@ -98,9 +98,12 @@ CREATE TABLE IF NOT EXISTS handshakes (
 -- Chats are created automatically once both handshake directions exist.
 -- They always live in the same room as their participants.
 CREATE TABLE IF NOT EXISTS chats (
-	address    TEXT PRIMARY KEY,
-	room       TEXT NOT NULL DEFAULT '',
-	created_at TEXT NOT NULL
+	address          TEXT PRIMARY KEY,
+	room             TEXT NOT NULL DEFAULT '',
+	scenario         TEXT NOT NULL DEFAULT '',
+	phase            TEXT NOT NULL DEFAULT '',
+	phase_started_at TEXT NOT NULL DEFAULT '',
+	created_at       TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS participants (
@@ -159,6 +162,18 @@ CREATE INDEX IF NOT EXISTS idx_events_status ON events(status, id);
 	if err := d.ensureColumn(ctx, "chats", "room", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
+	// Chat themes: chats carry the scenario key resolved by the agent.
+	if err := d.ensureColumn(ctx, "chats", "scenario", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	// Two-part conversations: the mandatory networking phase precedes the
+	// themed debate.
+	if err := d.ensureColumn(ctx, "chats", "phase", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := d.ensureColumn(ctx, "chats", "phase_started_at", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
 	if _, err := d.ExecContext(ctx, `
 UPDATE handshakes
 SET room = COALESCE(
@@ -181,7 +196,60 @@ WHERE room = ''`); err != nil {
 		return err
 	}
 	// Richer agent personas: bio limit was raised from 64 to 255 symbols.
-	return d.rebuildUsersWithLongBio(ctx)
+	if err := d.rebuildUsersWithLongBio(ctx); err != nil {
+		return err
+	}
+	// Message content cap: rebuild legacy messages tables that deviate from
+	// the 255-symbol schema (e.g. the short-lived 511 experiment) and trim
+	// rows that no longer fit.
+	return d.rebuildMessagesWithCap(ctx)
+}
+
+// rebuildMessagesWithCap recreates the messages table when its content
+// CHECK constraint deviates from the 255-symbol cap (SQLite cannot alter a
+// constraint in place). Every content is trimmed to 255 symbols with SQLite
+// substr, character-based, so the copy stays valid.
+func (d *DB) rebuildMessagesWithCap(ctx context.Context) error {
+	var ddl sql.NullString
+	err := d.QueryRowContext(ctx,
+		`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'messages'`).Scan(&ddl)
+	if errors.Is(err, sql.ErrNoRows) {
+		// Fresh database: the base schema above already creates it with the cap.
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("sqlite_master messages: %w", err)
+	}
+	if !ddl.Valid || strings.Contains(ddl.String, "length(content) <= 255") {
+		// Already at the 255-symbol schema.
+		return nil
+	}
+
+	const rebuild = `
+ALTER TABLE messages RENAME TO messages_old;
+
+CREATE TABLE messages (
+	tx_id      TEXT PRIMARY KEY,
+	"from"     TEXT NOT NULL REFERENCES users(address),
+	"to"       TEXT NOT NULL REFERENCES users(address),
+	created_at TEXT NOT NULL,
+	content    TEXT NOT NULL CHECK (length(content) <= 255),
+	chat       TEXT NOT NULL REFERENCES chats(address)
+);
+
+INSERT INTO messages (tx_id, "from", "to", created_at, content, chat)
+SELECT tx_id, "from", "to", created_at, substr(content, 1, 255), chat FROM messages_old;
+
+DROP TABLE messages_old;
+`
+	if _, err := d.ExecContext(ctx, rebuild); err != nil {
+		return fmt.Errorf("rebuild messages: %w", err)
+	}
+	if _, err := d.ExecContext(ctx,
+		`CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat)`); err != nil {
+		return fmt.Errorf("rebuild messages index: %w", err)
+	}
+	return d.vacuum(ctx)
 }
 
 // rebuildUsersWithLongBio recreates the users table when its bio CHECK

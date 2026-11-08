@@ -52,12 +52,85 @@ func (d *DB) CreateMessage(ctx context.Context, m *model.Message) error {
 	return errors.Join(ErrConflict, errors.New("could not generate unique message tx_id"))
 }
 
-// ListChatMessages returns all messages of a chat, oldest first.
+// CreateMessages writes several messages of ONE interaction atomically:
+// the chat lookup and the user checks run once, and every message is
+// inserted within the same transaction. It is used by the agent worker for
+// replies split into one message per sentence (at most maxTurnMessages
+// bubbles per interaction); the caller queues a single next-turn event
+// after the whole batch, not one event per message.
+func (d *DB) CreateMessages(ctx context.Context, from, to string, contents []string) ([]model.Message, error) {
+	if len(contents) == 0 {
+		return nil, errors.Join(ErrInvalid, errors.New("no messages to create"))
+	}
+
+	tx, err := d.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	chat, found, err := findChat(ctx, tx, from, to)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, errors.Join(ErrNotFound, fmt.Errorf(
+			"chat between %q and %q not found: handshakes in both directions are required", from, to))
+	}
+	for _, addr := range []string{from, to} {
+		var ok bool
+		if err := tx.QueryRowContext(ctx,
+			`SELECT EXISTS (SELECT 1 FROM users WHERE address = ? AND deleted_at IS NULL)`, addr).Scan(&ok); err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, errors.Join(ErrNotFound, fmt.Errorf("user %q not found", addr))
+		}
+	}
+
+	out := make([]model.Message, 0, len(contents))
+	for _, content := range contents {
+		m := model.Message{
+			From:      from,
+			To:        to,
+			Content:   content,
+			Chat:      chat.Address,
+			CreatedAt: time.Now().UTC(),
+		}
+		for attempt := 0; attempt < 3; attempt++ {
+			m.TxID = newTxID()
+			_, err := tx.ExecContext(ctx,
+				`INSERT INTO messages (tx_id, "from", "to", created_at, content, chat) VALUES (?, ?, ?, ?, ?, ?)`,
+				m.TxID, m.From, m.To, m.CreatedAt.Format(time.RFC3339), m.Content, m.Chat)
+			if isUnique(err) {
+				continue
+			}
+			if err != nil {
+				return nil, err
+			}
+			break
+		}
+		if m.TxID == "" {
+			return nil, errors.Join(ErrConflict, errors.New("could not generate unique message tx_id"))
+		}
+		out = append(out, m)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ListChatMessages returns all messages of a chat, oldest first. The rowid
+// tie-break keeps sentence-split batches (one interaction, one second
+// timestamp) in real insertion order; tx ids are random hex and would
+// shuffle the bubbles.
 func (d *DB) ListChatMessages(ctx context.Context, chatAddress string) ([]model.Message, error) {
 	rows, err := d.QueryContext(ctx,
 		`SELECT tx_id, "from", "to", created_at, content, chat
 		 FROM messages WHERE chat = ?
-		 ORDER BY created_at ASC, tx_id ASC`, chatAddress)
+		 ORDER BY created_at ASC, rowid ASC`, chatAddress)
 	if err != nil {
 		return nil, err
 	}
