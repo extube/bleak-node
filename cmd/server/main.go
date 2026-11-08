@@ -57,7 +57,7 @@ func main() {
 		worker := agent.New(database, *cfg, log)
 		go worker.Run(ctx)
 		log.Info("agent worker started",
-			"llm", cfg.LLMBaseURL, "model", cfg.LLMModel, "max_messages", cfg.MaxMessages)
+			"llm", cfg.LLMBaseURL, "model", cfg.LLMModel, "max_user_messages", cfg.MaxUserMessages)
 	}
 
 	go func() {
@@ -95,8 +95,22 @@ func agentConfig() *agent.Config {
 		// Thinking channel is disabled unless BLEAK_NODE_LLM_THINKING=1:
 		// the local qwen model otherwise buries the answer in reasoning_content.
 		DisableThinking: !envBool("BLEAK_NODE_LLM_THINKING", false),
-		MaxMessages:     envInt("BLEAK_NODE_CHAT_LIMIT", model.DefaultChatMaxMessages),
+		MaxUserMessages: clampEnvInt("BLEAK_NODE_CHAT_LIMIT",
+			model.DefaultUserMessageLimit, model.MinUserMessageLimit, model.MaxUserMessageLimit),
 	}
+}
+
+// clampEnvInt reads an int env var and falls back when unset or malformed;
+// the result is clamped into [lo, hi].
+func clampEnvInt(key string, fallback, lo, hi int) int {
+	v := envInt(key, fallback)
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
 
 // envBool reports whether the env var is truthy; unset keeps the fallback.
