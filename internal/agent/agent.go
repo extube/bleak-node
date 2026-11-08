@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -21,9 +22,11 @@ type Config struct {
 	// DisableThinking silences the reasoning channel of Qwen-style thinking
 	// models (chat_template_kwargs enable_thinking=false).
 	DisableThinking bool
-	// MaxMessages caps the conversation: once a chat has that many messages
-	// the prompts ask for a farewell (greeting + goodbye) and the chain stops.
-	MaxMessages int
+	// MaxUserMessages caps the messages ONE agent writes in a single chat,
+	// its farewell included: once the speaker is about to spend the quota,
+	// the prompts ask for a farewell and the chain stops (pattern-reply
+	// goodbye of the listener follows).
+	MaxUserMessages int
 	// Poll is the queue polling interval.
 	Poll time.Duration
 	// Timeout bounds one queued event end-to-end (queue reads + LLM call).
@@ -56,6 +59,9 @@ func New(database *db.DB, cfg Config, logger *slog.Logger) *Worker {
 	}
 	if cfg.MaxAttempts <= 0 {
 		cfg.MaxAttempts = 3
+	}
+	if cfg.MaxUserMessages <= 0 {
+		cfg.MaxUserMessages = model.DefaultUserMessageLimit
 	}
 	if logger == nil {
 		logger = slog.Default()
@@ -118,9 +124,16 @@ func (w *Worker) tick(ctx context.Context) {
 	}
 }
 
-// process generates the next message of the event speaker inside the chat
-// and, unless the chat is over the message limit, queues the turn of the
-// listener (the other agent) after saving the response.
+// process generates the next turn of the event speaker inside the chat and,
+// unless the speaker has spent its message quota, queues the turn of the
+// listener (the other agent) after saving the response. Every turn generates
+// exactly ONE next-turn event: a reply may be saved as several messages
+// (one per sentence, at most maxTurnMessages bubbles per interaction), but
+// the whole batch belongs to one interaction. Structure of a chat:
+//   - the first message of EVERY participant is a self-introduction;
+//   - the middle part is the themed conversation;
+//   - the end is the speaker's farewell (abstract impression, no context)
+//     followed by the listener's pattern-based reply goodbye, without LLM.
 func (w *Worker) process(ctx context.Context, ev model.Event) error {
 	if ev.Type != model.EventChatInteract {
 		// Unknown type: nothing to do, completing with the reason.
@@ -143,72 +156,213 @@ func (w *Worker) process(ctx context.Context, ev model.Event) error {
 		return errors.New("listener user does not exist")
 	}
 
+	chat, found, err := w.db.ChatByAddress(ctx, ev.Chat)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return errors.New("chat of the event does not exist")
+	}
+	phase := chat.Phase
+	if phase == "" {
+		phase = model.PhaseNetworking
+	}
+	theme, err := w.resolveScenario(ctx, chat)
+	if err != nil {
+		return err
+	}
+
 	msgs, err := w.db.ListChatMessages(ctx, ev.Chat)
 	if err != nil {
 		return err
 	}
-	overLimit := len(msgs) >= w.cfg.MaxMessages
-
-	// Is this reply the first message of this agent in the chat?
-	myTurns := 0
+	// Part-1 messages stay saved in the database, but the debate phase
+	// replays only the messages created since phase_started_at onward.
+	if phase == model.PhaseDebate && chat.PhaseStartedAt != nil {
+		filtered := make([]model.Message, 0, len(msgs))
+		for _, m := range msgs {
+			if !m.CreatedAt.Before(*chat.PhaseStartedAt) {
+				filtered = append(filtered, m)
+			}
+		}
+		msgs = filtered
+	}
+	// Quota of ONE participant, the closing message included: when the
+	// speaker is about to spend it, this turn either ends the part with a
+	// theme-change offer (part 1) or becomes the farewell (part 2).
+	speakerTurns := 0
 	for _, m := range msgs {
 		if m.From == ev.Speaker {
-			myTurns++
+			speakerTurns++
 		}
 	}
-	// Normalize replies already said (by ANY of the participants: agents
-	// also mimic each other, which reads as repetition).
-	priorWords := make(map[string]struct{}, len(msgs))
-	for _, m := range msgs {
-		priorWords[normalize(m.Content)] = struct{}{}
-	}
+	overLimit := speakerTurns+1 >= w.cfg.MaxUserMessages
+	transition := phase == model.PhaseNetworking && overLimit
 
-	// Anti-echo: regenerate up to cfg.EchoRetries times when the model
-	// parrots one of its earlier lines verbatim.
-	var (
-		content  string
-		repeated bool
-	)
-	for attempt := 0; attempt <= w.cfg.EchoRetries; attempt++ {
-		nudge := topicSeed(ev, len(msgs), attempt, overLimit, listener.Name)
-		if attempt > 0 {
-			nudge += " Your previous reply repeated an earlier line; write something NEW."
-		}
-		prompt := buildPrompt(ev.Chat, speaker, listener, msgs, myTurns, overLimit, nudge)
-		out, err := w.llm.Complete(ctx, prompt)
+	var content string
+	// batch holds the sentence-split, echo-filtered messages of a middle
+	// turn; farewells, introductions and the theme-change offer ignore it.
+	var batch []string
+	if overLimit && transition {
+		// The networking part closes with ONE message: an AFTER-step follow-up
+		// personal chat plus an offer to switch to the abstract theme.
+		out, err := w.llm.Complete(ctx, buildTransitionPrompt(theme, speaker, listener, msgs))
 		if err != nil {
 			return err
 		}
-		candidate := sanitizeContent(out)
-		if candidate == "" {
+		content = sanitizeContent(out)
+		if content == "" {
 			return errors.New("llm returned an empty message")
 		}
-		content = candidate
-		if isEcho(normalize(candidate), priorWords) {
-			repeated = true
-			continue
+	} else if overLimit {
+		// The farewell is generated WITHOUT the transcript and without any
+		// earlier context: a vague abstract impression of the chat, a casual
+		// reason to leave and a polite goodbye.
+		out, err := w.llm.Complete(ctx, buildGoodbyePrompt(theme, speaker))
+		if err != nil {
+			return err
 		}
-		repeated = false
-		break
-	}
-	if repeated {
-		// Even the retries parroted; save the last one instead of blocking
-		// the conversation, but leave a trace.
-		w.log.Warn("agent message repeats an earlier line",
-			"chat", ev.Chat, "speaker", ev.Speaker)
+		content = sanitizeContent(out)
+		if content == "" {
+			return errors.New("llm returned an empty message")
+		}
+	} else {
+		// Anti-echo: regenerate up to cfg.EchoRetries times when the model
+		// parrots one of its earlier lines verbatim.
+		priorWords := make(map[string]struct{}, len(msgs))
+		for _, m := range msgs {
+			priorWords[normalize(m.Content)] = struct{}{}
+		}
+		repeated := false
+		for attempt := 0; attempt <= w.cfg.EchoRetries; attempt++ {
+			nudge := ""
+			if speakerTurns > 0 {
+				nudge = topicSeed(ev, phase, speakerTurns, attempt, overLimit)
+			}
+			if attempt > 0 {
+				nudge += " Your previous reply repeated an earlier line; write something NEW."
+			}
+			prompt := buildPrompt(theme, phase, speaker, listener, msgs, speakerTurns, overLimit, nudge)
+			out, err := w.llm.Complete(ctx, prompt)
+			if err != nil {
+				return err
+			}
+			candidate := sanitizeContent(out)
+			if candidate == "" {
+				return errors.New("llm returned an empty message")
+			}
+			content = candidate
+			// Dialog clarity: the reply is delivered one bubble per sentence,
+			// so echo detection runs per bubble. A batch whose every bubble
+			// repeats an earlier line is regenerated; a batch with SOME old
+			// bubbles shrinks to the new thoughts only - echoed sentences are
+			// dropped, never saved.
+			parts := splitIntoMessages(candidate, model.MaxMessageContentLen)
+			echoParts := 0
+			for _, p := range parts {
+				if isEcho(normalize(p), priorWords) {
+					echoParts++
+				}
+			}
+			if len(parts) > 0 && echoParts == len(parts) {
+				repeated = true
+				continue
+			}
+			batch = parts
+			if echoParts > 0 {
+				kept := make([]string, 0, len(parts))
+				dropped := 0
+				for _, p := range parts {
+					if isEcho(normalize(p), priorWords) {
+						dropped++
+						continue
+					}
+					kept = append(kept, p)
+				}
+				if dropped > 0 {
+					w.log.Warn("agent reply bubbles dropped as echoes",
+						"chat", ev.Chat, "speaker", ev.Speaker, "dropped", dropped)
+				}
+				batch = kept
+			}
+			repeated = false
+			break
+		}
+		if repeated {
+			// Even the retries echoed fully; save the last batch instead of
+			// blocking the conversation, but leave a trace.
+			batch = []string{content}
+			w.log.Warn("agent message repeats an earlier line",
+				"chat", ev.Chat, "speaker", ev.Speaker)
+		}
 	}
 
-	m := model.Message{From: ev.Speaker, To: ev.Listener, Content: content}
-	if err := w.db.CreateMessage(ctx, &m); err != nil {
+	// Introductions, the theme-change offer and the farewell are never
+	// split; ordinary replies use the echo-free sentence batch.
+	var parts []string
+	switch {
+	case overLimit, speakerTurns == 0, transition:
+		parts = []string{content}
+	default:
+		parts = batch
+	}
+
+	saved, err := w.db.CreateMessages(ctx, ev.Speaker, ev.Listener, parts)
+	if err != nil {
 		return err
 	}
-	w.log.Info("agent message",
-		"chat", ev.Chat, "from", speaker.Name, "to", listener.Name, "content", content)
-
-	// Hand the turn to the other agent; over the limit the farewell above
-	// closes the conversation and no further event is queued.
-	if !overLimit {
-		return w.db.EnqueueEvent(ctx, model.EventChatInteract, ev.Chat, ev.Listener, ev.Speaker)
+	for i, m := range saved {
+		w.log.Info("agent message",
+			"chat", ev.Chat, "from", speaker.Name, "to", listener.Name,
+			"part", fmt.Sprintf("%d/%d", i+1, len(saved)), "content", m.Content)
 	}
-	return nil
+
+	switch {
+	case transition:
+		// Part 1 ends HERE: stamp the moment the debate begins (the hobby
+		// messages stay saved for the API) and let the OTHER agent open the
+		// themed part of the chat.
+		if err := w.db.SetChatPhase(ctx, ev.Chat, model.PhaseDebate, time.Now()); err != nil {
+			return err
+		}
+		w.log.Info("chat phase changed",
+			"chat", ev.Chat, "phase", model.PhaseDebate, "theme", theme.Name)
+		return w.db.EnqueueEvent(ctx, model.EventChatInteract, ev.Chat, ev.Listener, ev.Speaker)
+	case overLimit:
+		// Reply goodbye: a pattern message of the listener, generated
+		// locally without the LLM and without the transcript. The chat ends
+		// here: no further event is queued.
+		reply := goodbyeReply()
+		replyMsgs, err := w.db.CreateMessages(ctx, ev.Listener, ev.Speaker, []string{reply})
+		if err != nil {
+			return err
+		}
+		for _, m := range replyMsgs {
+			w.log.Info("agent message",
+				"chat", ev.Chat, "from", listener.Name, "to", speaker.Name,
+				"part", "goodbye reply", "content", m.Content)
+		}
+		return nil
+	}
+
+	// Hand the turn to the other agent.
+	return w.db.EnqueueEvent(ctx, model.EventChatInteract, ev.Chat, ev.Listener, ev.Speaker)
+}
+
+// resolveScenario returns the theme of the chat. When the chat has no
+// scenario yet, one is picked from the catalog and persisted; chats keep
+// their scenario across kickoffs.
+func (w *Worker) resolveScenario(ctx context.Context, chat model.Chat) (Theme, error) {
+	if chat.Scenario != "" {
+		if theme := themeByKey(chat.Scenario); theme != nil {
+			return *theme, nil
+		}
+		// Stale key from an older catalog: use the default theme.
+		return Themes[0], nil
+	}
+	picked := Themes[randInt(len(Themes))]
+	if err := w.db.SetChatScenario(ctx, chat.Address, picked.Key); err != nil {
+		return Theme{}, err
+	}
+	return picked, nil
 }

@@ -1000,9 +1000,20 @@ const docTemplate = `{
                         "$ref": "#/definitions/model.Participant"
                     }
                 },
+                "phase": {
+                    "type": "string",
+                    "example": "networking"
+                },
+                "phase_started_at": {
+                    "type": "string"
+                },
                 "room": {
                     "type": "string",
                     "example": "0xroom123"
+                },
+                "scenario": {
+                    "type": "string",
+                    "example": "ai-future"
                 }
             }
         },
