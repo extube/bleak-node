@@ -23,9 +23,11 @@ func buildPrompt(theme Theme, phase string, speaker, listener model.User, msgs [
 	sys := fmt.Sprintf(`You are role-playing the chat agent "%s" (address %s) in a small peer-to-peer social network.
 Public bio (what everyone knows about you): %s
 Private bio (facts only you know; your hidden feelings and goals): %s
-Stay strictly in character and let both bios shape your tone, vocabulary and goals.
-Write like a REAL person texting in a messenger such as WhatsApp or Telegram: short, casual, everyday lines, contractions, natural slang, at most a couple of sentences per reply; no essays, no formalities, no list-making.
-Your reply is split into chat messages sentence by sentence, but remember the rules of a clear dialog: keep the whole reply at most THREE short sentences, ask AT MOST ONE question, and put the question LAST: everything you write after the first question mark is discarded, so the listener can focus on answering the question.
+Stay strictly in character and let both bios shape your tone and goals.
+HARD FACT RULE: speak ONLY from what your bios state, the current transcript and plain common sense; NEVER invent specific personal facts (family, kids, pets, trips, won awards, employers, possessions) that the bios do not mention; when a topic falls outside the bios, answer in abstract, general terms instead of making things up.
+Write like a REAL person texting in a messenger: short, casual lines, contractions, everyday words.
+BREVITY IS THE RULE: the WHOLE reply is TWO short sentences at most (about 25 words total, under 200 characters), ONE thought per message.
+Your reply is split into chat messages sentence by sentence: put ONE question in the reply at most, and make it the LAST sentence: everything after the first question mark is discarded.
 Never copy or paraphrase lines from the transcript: every message you write must bring something new.
 Never add quotes, prefixes like "Agent:", markdown or explanations; never write raw addresses (0x...); call the other participant by name.`,
 		speaker.Name, speaker.Address, bioOrNone(speaker.PublicBio), bioOrNone(speaker.PrivateBio))
@@ -45,34 +47,19 @@ Never add quotes, prefixes like "Agent:", markdown or explanations; never write 
 Theme opening: %s
 Answer in ONE short opening message (not split), casual and natural.`, theme.Scenario.Hello))
 	case speakerTurns == 0:
-		b.WriteString(fmt.Sprintf(`NETWORKING - step BEFORE. You are reaching out with one clear reason: to know %s through their own work, businesses or hobbies; people come first, contacts never.
-- introduce yourself in ONE clear, natural sentence: name, what you actually do (work, business, main hobby) and one line about your interests after;
-- finish by asking what the partner is focused on these days (an open question about their craft, not their weather).
-Answer in ONE intro message (not split), short and natural.`, listener.Name))
+		b.WriteString(fmt.Sprintf(`NETWORKING - step BEFORE. You are reaching out to know %s through their work or hobby; people come first, contacts never.
+Introduce yourself in ONE short sentence: name plus what you actually do, and finish by asking what they are focused on these days.
+Answer in ONE intro message, two short sentences at most.`, listener.Name))
 	case phase == model.PhaseDebate:
 		b.WriteString(fmt.Sprintf(`Continue this themed conversation with %s.
 Theme directive: %s
 The last message above was written by %s - answer THAT message, subject first. Do not repeat what you already said; keep the debate friendly and personal.`, listener.Name, theme.Scenario.Context, listener.Name))
 	case phase == model.PhaseNetworking:
-		b.WriteString(fmt.Sprintf(`NETWORKING - the curiosity lists. Every turn of this stage must stay anchored in yours and your partner's WORK, BUSINESSES and HOBBIES: answers, crafts, projects, tastes - no off-topic small talk, no city weather.
-DISCOVER ABOUT %s (ask at most ONE open-questions per reply, with genuine curiosity - not an interview):
-- what are they focused on these days;
-- what do they enjoy or care about outside work;
-- what are they working toward;
-- what challenges or opportunities are they navigating;
-- what strengths, skills or experiences are they proud of;
-- what kind of people, ideas or opportunities are useful to them;
-- how do they prefer to stay in touch;
-- what would make this conversation valuable for them.
-PRESENT ABOUT YOURSELF in response to what %s just wrote - never as a pitch:
-- state once more, in a fresh natural way, who you are and what you do if relevant;
-- share what you are interested in or working toward, what you are good at, what you care about beyond work;
-- give ONE specific example or short story that makes your work or hobby memorable;
-- say honestly what you know, what you are looking for and one way you might be helpful to %s;
-- mention the kind of people, projects or experiences you are open to, if natural.
-KEEP IT HUMAN: listen for shared interests and possible ways to help; be honest; never turn the talk into an interview.
-STRICTLY NO CONTACT EXCHANGE: never share or ask for phone numbers, messenger handles, e-mails or addresses, and never form concrete appointments; talking about preferences in the abstract is fine.
-The last message above was written by %s - answer THAT message, subject first. Do not introduce yourself again and do not repeat what you already said.`, listener.Name, listener.Name, listener.Name, listener.Name))
+		b.WriteString(fmt.Sprintf(`NETWORKING - an even two-way talk between people curious about crafts: YOU share, THEY share.
+The last message above was written by %s - answer THAT message, subject first:
+- give one NEW concrete detail about your own WORK, STARTUP or HOBBY, taken only from your bios (something the transcript has not covered yet);
+- then ask ONE short open question about %s's work, business or hobby - your curiosity, not an interview.
+No re-introductions, no repeating yourself, never invent facts about your life, no contact details or concrete appointments.`, listener.Name, listener.Name))
 	}
 	if nudge != "" {
 		b.WriteString("\n\n" + nudge)
@@ -85,9 +72,10 @@ The last message above was written by %s - answer THAT message, subject first. D
 }
 
 // buildGoodbyePrompt assembles the farewell prompt WITHOUT the transcript
-// and without any earlier context: the goodbye must be abstract and polite,
-// like the common ending of an everyday conversation.
-func buildGoodbyePrompt(theme Theme, speaker model.User) []llmMessage {
+// and without most context: the goodbye stays vague and polite, like the
+// common ending of an everyday conversation. When the listener left an open
+// question, its text rides along so the answer-first rule can reference it.
+func buildGoodbyePrompt(theme Theme, speaker model.User, last string) []llmMessage {
 	sys := fmt.Sprintf(`You are role-playing the chat agent "%s" (address %s) in a small peer-to-peer social network.
 Public bio (what everyone knows about you): %s
 Private bio (facts only you know; your hidden feelings and goals): %s
@@ -98,16 +86,30 @@ Never add quotes, prefixes like "Agent:", markdown or explanations; never write 
 	b := strings.Builder{}
 	b.WriteString(`IMPORTANT: this is the END of the chat. Send ONLY a farewell message.
 Rules for the farewell:
-- exactly ONE short plain-text message (one or two sentences);
-- START with a VAGUE abstract impression of the whole conversation, like everyday small talk wrap-ups: "It's all been cool, but I have to head out", "Well, it was nice talking to you, but I need to run", "This chat was a pleasure, though it's getting late";
+- exactly ONE short plain-text message (ONE or TWO short sentences, under 200 characters);
+- if the partner left an OPEN QUESTION in their last message, answer it in the FIRST sentence, briefly and honestly — real people do that before leaving;
+- after the answer (or from the start if there was no question): START with a VAGUE abstract impression of the whole conversation, like everyday small talk wrap-ups: "It's all been cool, but I have to head out", "Well, it was nice talking to you, but I need to run", "This chat was a pleasure, though it's getting late";
 - add a light, CASUAL reason to leave (errands, a shift, it's late, an appointment) and finish with a polite common goodbye ("take care", "see you around");
-- do NOT name the listener or use addresses; do NOT mention any concrete topic, fact, opinion or phrase from the conversation: the impression must stay vague and generic ("it was cool"), never analytical;
-- forget everything that was written in this chat before your farewell.
+- apart from that first answer, do NOT name the listener or use addresses; do NOT mention any concrete topic, fact, opinion or phrase from the conversation: the impression must stay vague and generic ("it was cool"), never analytical;
+- forget everything else that was written in this chat before your farewell.
 Farewell direction from the scenario: ` + theme.Scenario.Goodbye)
+	if answer := questionForFarewell(last); answer != "" {
+		b.WriteString("\nThe partner's last message: " + answer)
+	}
 	return []llmMessage{
 		{Role: "system", Content: sys},
 		{Role: "user", Content: b.String()},
 	}
+}
+
+// questionForFarewell returns the partner's last message for the farewell
+// prompt, only when it asks an open question; empty otherwise.
+func questionForFarewell(last string) string {
+	s := strings.TrimSpace(last)
+	if s == "" || !strings.Contains(s, "?") {
+		return ""
+	}
+	return s
 }
 
 // themeBrief describes the shared situation of the chat for the prompt.
@@ -301,7 +303,28 @@ func topicSeed(ev model.Event, phase string, turnNumber, attempt int, overLimit 
 	} else {
 		seed = networkingSeeds[(int(fnv32a(ev.Chat))+turnNumber*(1+attempt))%len(networkingSeeds)]
 	}
-	return "This turn must cover: " + seed
+	return "This turn must cover: " + seed + " KEEP THE REPLY SHORT: two chat-short sentences and no more."
+}
+
+// lastListenerMessage returns the most recent message the listener sent
+// before this turn, so the prompts can point the speaker at it.
+func lastListenerMessage(listener model.User, msgs []model.Message) (string, bool) {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].From == listener.Address {
+			return msgs[i].Content, true
+		}
+	}
+	return "", false
+}
+
+// questionDirect builds the answer-first nudge for a turn when the listener
+// left an open question in their last message; such a turn owns the answer
+// instead of the rotating topic seed.
+func questionDirect(listener model.User, lastMsg string) string {
+	if !strings.Contains(lastMsg, "?") {
+		return ""
+	}
+	return fmt.Sprintf(`%s asked you a question above (their last message). START your reply by answering it directly in one plain sentence, then add your one craft detail; the rotating topic of this chat waits until the next turn.`, listener.Name)
 }
 
 // goodbyeReplies are pattern acknowledgements a listener may answer a
@@ -369,10 +392,15 @@ func sanitizeContent(s string) string {
 			s = strings.TrimSpace(s[1 : len(s)-len(q)])
 		}
 	}
-	// Enforce the message length limit.
+	// Enforce the message length limit, cutting on the last word boundary
+	// so a bubble never ends mid-word ("keep up wi").
 	r := []rune(s)
 	if len(r) > model.MaxMessageContentLen {
-		r = r[:model.MaxMessageContentLen]
+		if sp := lastIndexSpace(r, model.MaxMessageContentLen); sp > 0 {
+			r = r[:sp]
+		} else {
+			r = r[:model.MaxMessageContentLen]
+		}
 	}
 	return strings.TrimSpace(string(r))
 }
@@ -387,8 +415,9 @@ var noSplitAfter = map[string]bool{
 }
 
 // maxTurnMessages caps how many sentence messages ONE interaction may
-// produce, keeping the dialog max clear for both readers.
-const maxTurnMessages = 3
+// produce, keeping the dialog max clear for both readers. Two bubbles is the
+// texting norm: one statement plus the question.
+const maxTurnMessages = 2
 
 // splitIntoMessages cuts a model reply into separate chat messages, one per
 // sentence (like people texting in messengers). Two dialog-clarity rules
