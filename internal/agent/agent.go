@@ -27,6 +27,10 @@ type Config struct {
 	// the prompts ask for a farewell and the chain stops (pattern-reply
 	// goodbye of the listener follows).
 	MaxUserMessages int
+	// Debate enables the second, themed part of the chat (the transition
+	// message and the debate phase). When false the whole interaction
+	// stays in the networking phase and ends with the farewell.
+	Debate bool
 	// Poll is the queue polling interval.
 	Poll time.Duration
 	// Timeout bounds one queued event end-to-end (queue reads + LLM call).
@@ -74,8 +78,15 @@ func New(database *db.DB, cfg Config, logger *slog.Logger) *Worker {
 	}
 }
 
-// Run processes the queue until ctx is cancelled.
+// Run processes the queue until ctx is cancelled. Processing events of a
+// previous run are reclaimed first: this worker is the single queue consumer,
+// so any "processing" left by a crashed or restarted process is an orphan.
 func (w *Worker) Run(ctx context.Context) {
+	if n, err := w.db.ReclaimProcessing(ctx, 0); err != nil {
+		w.log.Error("reclaim processing events", "err", err)
+	} else if n > 0 {
+		w.log.Warn("reclaimed processing events of a previous run", "count", n)
+	}
 	ticker := time.NewTicker(w.cfg.Poll)
 	defer ticker.Stop()
 	for {
@@ -119,6 +130,13 @@ func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
 }
 
 func (w *Worker) tick(ctx context.Context) {
+	// Defensive sweep: a processing row older than a few full run windows can
+	// only be an orphan of a dead consumer (one completes within cfg.Timeout).
+	if n, err := w.db.ReclaimProcessing(ctx, 5*w.cfg.Timeout); err != nil {
+		w.log.Error("reclaim stale processing events", "err", err)
+	} else if n > 0 {
+		w.log.Warn("reclaimed stale processing events", "count", n)
+	}
 	if _, err := w.RunOnce(ctx); err != nil {
 		w.log.Error("agent queue error", "err", err)
 	}
@@ -167,6 +185,11 @@ func (w *Worker) process(ctx context.Context, ev model.Event) error {
 	if phase == "" {
 		phase = model.PhaseNetworking
 	}
+	if !w.cfg.Debate && phase == model.PhaseDebate {
+		// Part 2 removed: chats run networking-only, so a stale
+		// debate stamp from an older build is ignored.
+		phase = model.PhaseNetworking
+	}
 	theme, err := w.resolveScenario(ctx, chat)
 	if err != nil {
 		return err
@@ -197,7 +220,7 @@ func (w *Worker) process(ctx context.Context, ev model.Event) error {
 		}
 	}
 	overLimit := speakerTurns+1 >= w.cfg.MaxUserMessages
-	transition := phase == model.PhaseNetworking && overLimit
+	transition := w.cfg.Debate && phase == model.PhaseNetworking && overLimit
 
 	var content string
 	// batch holds the sentence-split, echo-filtered messages of a middle
@@ -215,10 +238,12 @@ func (w *Worker) process(ctx context.Context, ev model.Event) error {
 			return errors.New("llm returned an empty message")
 		}
 	} else if overLimit {
-		// The farewell is generated WITHOUT the transcript and without any
-		// earlier context: a vague abstract impression of the chat, a casual
-		// reason to leave and a polite goodbye.
-		out, err := w.llm.Complete(ctx, buildGoodbyePrompt(theme, speaker))
+		// The farewell is generated WITHOUT the transcript: a vague abstract
+		// impression of the chat, a casual reason to leave and a polite
+		// goodbye. When the listener left an open question, its text rides
+		// along so the farewell can answer it in the first sentence.
+		last, _ := lastListenerMessage(listener, msgs)
+		out, err := w.llm.Complete(ctx, buildGoodbyePrompt(theme, speaker, last))
 		if err != nil {
 			return err
 		}
@@ -238,6 +263,14 @@ func (w *Worker) process(ctx context.Context, ev model.Event) error {
 			nudge := ""
 			if speakerTurns > 0 {
 				nudge = topicSeed(ev, phase, speakerTurns, attempt, overLimit)
+				// Answer-first rule: when the partner's last message asks an
+				// open question, the turn belongs to the answer, not to the
+				// rotating topic seed.
+				if last, _ := lastListenerMessage(listener, msgs); last != "" {
+					if direct := questionDirect(listener, last); direct != "" {
+						nudge = direct
+					}
+				}
 			}
 			if attempt > 0 {
 				nudge += " Your previous reply repeated an earlier line; write something NEW."

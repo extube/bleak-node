@@ -14,9 +14,9 @@ func TestSplitIntoMessagesRules(t *testing.T) {
 			want:  []string{"Nice to meet you.", "Where are you from?"},
 		},
 		{
-			name:  "no question, at most three sentences",
+			name:  "no question, at most two sentences",
 			reply: "One. Two. Three. Four. Five.",
-			want:  []string{"One.", "Two.", "Three."},
+			want:  []string{"One.", "Two."},
 		},
 		{
 			name:  "oversized single sentence is capped at the limit",

@@ -29,6 +29,18 @@ import (
 func main() {
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 
+	// .env fills unset variables; the real environment keeps precedence.
+	envFile := envOr("BLEAK_NODE_ENV_FILE", ".env")
+	if _, statErr := os.Stat(envFile); statErr == nil && envFile != "none" {
+		if err := loadEnvFile(envFile, func(line string) {
+			log.Warn("env file line ignored", "file", envFile, "line", line)
+		}); err != nil {
+			log.Error("load env file", "file", envFile, "err", err)
+			os.Exit(1)
+		}
+		log.Info("env file loaded", "file", envFile)
+	}
+
 	dbPath := envOr("BLEAK_NODE_DB", "bleak-node.db")
 	addr := envOr("BLEAK_NODE_ADDR", "0.0.0.0:8080")
 
@@ -95,6 +107,9 @@ func agentConfig() *agent.Config {
 		// Thinking channel is disabled unless BLEAK_NODE_LLM_THINKING=1:
 		// the local qwen model otherwise buries the answer in reasoning_content.
 		DisableThinking: !envBool("BLEAK_NODE_LLM_THINKING", false),
+		// Part 2 (themed debate) is off unless BLEAK_NODE_AGENT_DEBATE=1:
+		// chats end with the farewell right after the networking phase.
+		Debate: envBool("BLEAK_NODE_AGENT_DEBATE", false),
 		MaxUserMessages: clampEnvInt("BLEAK_NODE_CHAT_LIMIT",
 			model.DefaultUserMessageLimit, model.MinUserMessageLimit, model.MaxUserMessageLimit),
 	}

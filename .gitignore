@@ -15,3 +15,6 @@ coverage.*
 # IDE
 .idea/
 .vscode/
+
+# Local environment (use .env.example as template)
+.env

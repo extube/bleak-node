@@ -69,6 +69,22 @@ func (d *DB) RequeueEvent(ctx context.Context, id int64) error {
 	return err
 }
 
+// ReclaimProcessing returns processing events back to pending. olderThan
+// bounds the staleness relative to the row creation time: a value of 0
+// reclaims every processing row (safe for a single-node worker, where a
+// processing row at startup can only come from a crashed run), a positive
+// value reclaims only rows older than the cutoff as a defensive sweep.
+func (d *DB) ReclaimProcessing(ctx context.Context, olderThan time.Duration) (int64, error) {
+	cutoff := time.Now().UTC().Add(-olderThan).Format(time.RFC3339)
+	res, err := d.ExecContext(ctx,
+		`UPDATE events SET status = ?, error = '' WHERE status = ? AND created_at <= ?`,
+		EventPending, EventProcessing, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // CompleteEvent marks an entry done (errMsg empty) or failed.
 func (d *DB) CompleteEvent(ctx context.Context, id int64, errMsg string) error {
 	status := EventDone
