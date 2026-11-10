@@ -866,6 +866,160 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/room/{room}/user/{address}/greeting": {
+            "get": {
+                "description": "Returns the greeting (hello) message of a non-deleted user.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "users"
+                ],
+                "summary": "get user greeting",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Room address",
+                        "name": "room",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "User address",
+                        "name": "address",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.GreetingResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            },
+            "put": {
+                "description": "Stores the greeting (hello) message of a non-deleted user. The greeting must be non-empty and must not contain questions: it opens every new chat of the user.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "users"
+                ],
+                "summary": "set user greeting",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Room address",
+                        "name": "room",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "User address",
+                        "name": "address",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Greeting to set",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.PutUserGreetingRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.GreetingResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/room/{room}/user/{address}/greeting/regenerate": {
+            "post": {
+                "description": "Re-generates the greeting (hello) message of a non-deleted user from their bios. The optional language query parameter selects \"en\" (default) or \"ru\".",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "users"
+                ],
+                "summary": "regenerate user greeting",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Room address",
+                        "name": "room",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "User address",
+                        "name": "address",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Greeting language: en (default) or ru",
+                        "name": "language",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.GreetingResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/api/user/{address}/chat": {
             "get": {
                 "description": "Returns every chat the user participates in, newest first.",
@@ -1047,6 +1201,10 @@ const docTemplate = `{
                 "deleted_at": {
                     "type": "string"
                 },
+                "greeting": {
+                    "type": "string",
+                    "example": "Hi, I'm Alice — I paint watercolor postcards."
+                },
                 "name": {
                     "type": "string",
                     "example": "Alice"
@@ -1144,6 +1302,10 @@ const docTemplate = `{
         "server.CreateUserRequest": {
             "type": "object",
             "properties": {
+                "language": {
+                    "description": "Language of the generated greeting: \"en\" (default) or \"ru\".",
+                    "type": "string"
+                },
                 "name": {
                     "type": "string"
                 },
@@ -1151,6 +1313,17 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "public_bio": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.GreetingResponse": {
+            "type": "object",
+            "properties": {
+                "address": {
+                    "type": "string"
+                },
+                "greeting": {
                     "type": "string"
                 }
             }
@@ -1165,6 +1338,14 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "speaker": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.PutUserGreetingRequest": {
+            "type": "object",
+            "properties": {
+                "greeting": {
                     "type": "string"
                 }
             }

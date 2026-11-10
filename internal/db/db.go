@@ -170,6 +170,9 @@ CREATE INDEX IF NOT EXISTS idx_events_status ON events(status, id);
 	if err := d.ensureColumn(ctx, "chats", "language", "TEXT NOT NULL DEFAULT 'en'"); err != nil {
 		return err
 	}
+	if err := d.ensureColumn(ctx, "users", "greeting", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
 	// Two-part conversations: the mandatory networking phase precedes the
 	// themed debate.
 	if err := d.ensureColumn(ctx, "chats", "phase", "TEXT NOT NULL DEFAULT ''"); err != nil {

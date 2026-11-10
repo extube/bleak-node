@@ -30,7 +30,7 @@ func TestSetChatLanguage(t *testing.T) {
 
 	request := httptest.NewRequest(http.MethodPatch, "/api/chat/0xchat/language", strings.NewReader(`{"language":"ru"}`))
 	response := httptest.NewRecorder()
-	New(database).Handler().ServeHTTP(response, request)
+	New(database, nil).Handler().ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/extube/bleak-node/internal/db"
@@ -76,6 +77,35 @@ func New(database *db.DB, cfg Config, logger *slog.Logger) *Worker {
 		cfg: cfg,
 		log: logger,
 	}
+}
+
+// completeWithRetry tolerates a flaky gateway: empty answers come in
+// short bursts, so a couple of brief retries inside ONE event attempt
+// stop a whole chat turn from burning its queue-level attempts (three
+// empty responses otherwise kill the event and hang the chat forever).
+func (w *Worker) completeWithRetry(ctx context.Context, prompt []llmMessage) (string, error) {
+	const tries = 3
+	var lastErr error
+	for i := 0; i < tries; i++ {
+		out, err := w.llm.Complete(ctx, prompt)
+		if err == nil && strings.TrimSpace(out) != "" {
+			return out, nil
+		}
+		if err != nil {
+			lastErr = err
+		} else {
+			lastErr = errors.New("llm returned an empty message")
+		}
+		if ctx.Err() != nil {
+			return "", lastErr
+		}
+		select {
+		case <-ctx.Done():
+			return "", lastErr
+		case <-time.After(time.Duration(i+1) * 2 * time.Second): // 2s, 4s
+		}
+	}
+	return "", lastErr
 }
 
 // Run processes the queue until ctx is cancelled. Processing events of a
@@ -153,8 +183,10 @@ func (w *Worker) tick(ctx context.Context) {
 // listener (the other agent) after saving the response. Every turn generates
 // exactly ONE next-turn event: a reply is saved as one natural message bubble.
 // Structure of a chat:
-//   - the first message of EVERY participant is a self-introduction;
-//   - the middle part is the themed conversation;
+//   - the chat opens with the two participants' stored greeting messages
+//     (plain hello bubbles, no questions, no LLM turn);
+//   - the chat opener then continues with the first question turn;
+//   - the middle part is the conversation;
 //   - the end is a warm farewell followed by a short localized reply, without LLM.
 func (w *Worker) process(ctx context.Context, ev model.Event) error {
 	if ev.Type != model.EventChatInteract {
@@ -203,6 +235,26 @@ func (w *Worker) process(ctx context.Context, ev model.Event) error {
 	if err != nil {
 		return err
 	}
+	// Chat start: both users open the dialog with their stored greeting
+	// messages - plain hello bubbles, no LLM turn and no questions. The
+	// starter then gets the next event to continue with the first
+	// question of the conversation.
+	if phase == model.PhaseNetworking && len(msgs) == 0 {
+		greetings, err := w.db.CreateMessages(ctx, ev.Speaker, ev.Listener, []string{
+			greetingOrFallback(speaker, chat.Language),
+			greetingOrFallback(listener, chat.Language),
+		})
+		if err != nil {
+			return err
+		}
+		for i, m := range greetings {
+			w.log.Info("agent message",
+				"chat", ev.Chat, "from", speaker.Name, "to", listener.Name,
+				"part", fmt.Sprintf("greeting %d/%d", i+1, len(greetings)), "content", m.Content)
+		}
+		return w.db.EnqueueEvent(ctx, model.EventChatInteract, ev.Chat, ev.Speaker, ev.Listener)
+	}
+
 	// Part-1 messages stay saved in the database, but the debate phase
 	// replays only the messages created since phase_started_at onward.
 	if phase == model.PhaseDebate && chat.PhaseStartedAt != nil {
@@ -233,7 +285,7 @@ func (w *Worker) process(ctx context.Context, ev model.Event) error {
 	if overLimit && transition {
 		// The networking part closes with ONE message: an AFTER-step follow-up
 		// personal chat plus an offer to switch to the abstract theme.
-		out, err := w.llm.Complete(ctx, buildTransitionPrompt(theme, speaker, listener, msgs, chat.Language))
+		out, err := w.completeWithRetry(ctx, buildTransitionPrompt(theme, speaker, listener, msgs, chat.Language))
 		if err != nil {
 			return err
 		}
@@ -247,7 +299,7 @@ func (w *Worker) process(ctx context.Context, ev model.Event) error {
 		// question, its text rides along so the farewell can answer it in
 		// the first sentence.
 		last, _ := lastListenerMessage(listener, msgs)
-		out, err := w.llm.Complete(ctx, buildGoodbyePrompt(theme, speaker, last, chat.Language))
+		out, err := w.completeWithRetry(ctx, buildGoodbyePrompt(theme, speaker, last, chat.Language))
 		if err != nil {
 			return err
 		}
@@ -284,7 +336,7 @@ func (w *Worker) process(ctx context.Context, ev model.Event) error {
 				}
 			}
 			prompt := buildPrompt(theme, phase, speaker, listener, msgs, speakerTurns, overLimit, nudge, chat.Language)
-			out, err := w.llm.Complete(ctx, prompt)
+			out, err := w.completeWithRetry(ctx, prompt)
 			if err != nil {
 				return err
 			}

@@ -14,12 +14,23 @@ import (
 
 // Server holds shared dependencies for all handlers.
 type Server struct {
-	db *db.DB
+	db      *db.DB
+	greeter Greeter
 }
 
-// New creates a server with its routing table already registered.
-func New(database *db.DB) *Server {
-	return &Server{db: database}
+// Greeter generates a user's greeting (hello) message from their bios.
+// The greeting opens every new chat of the user, so it never carries
+// questions; implementations fall back to a plain template when the
+// generator is unavailable.
+type Greeter interface {
+	GenerateGreeting(name, publicBio, privateBio, language string) string
+}
+
+// New creates a server with its routing table already registered. The
+// greeter may be nil: user creation then falls back to the plain
+// bio-based greeting.
+func New(database *db.DB, greeter Greeter) *Server {
+	return &Server{db: database, greeter: greeter}
 }
 
 // Handler builds and returns the HTTP handler with all routes registered.
@@ -39,6 +50,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/room/{room}/user/{address}", s.GetUser)
 	mux.HandleFunc("PUT /api/room/{room}/user/{address}", s.UpdateUser)
 	mux.HandleFunc("DELETE /api/room/{room}/user/{address}", s.DeleteUser)
+	mux.HandleFunc("GET /api/room/{room}/user/{address}/greeting", s.GetUserGreeting)
+	mux.HandleFunc("PUT /api/room/{room}/user/{address}/greeting", s.PutUserGreeting)
+	mux.HandleFunc("POST /api/room/{room}/user/{address}/greeting/regenerate", s.RegenerateUserGreeting)
 
 	// Handshakes.
 	mux.HandleFunc("POST /api/handshake", s.CreateHandshake)

@@ -20,6 +20,7 @@ type User struct {
 	Room       string     `json:"room" example:"0xroom123"`
 	PublicBio  string     `json:"public_bio" example:"public hello"`
 	PrivateBio string     `json:"private_bio" example:"real me"`
+	Greeting   string     `json:"greeting" example:"Hi, I'm Alice — I paint watercolor postcards."`
 	CreatedAt  time.Time  `json:"created_at"`
 	UpdatedAt  time.Time  `json:"updated_at"`
 	DeletedAt  *time.Time `json:"deleted_at"`

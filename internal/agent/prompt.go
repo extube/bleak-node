@@ -66,11 +66,14 @@ Never add quotes, labels like "Agent:", markdown, or explanations; never write r
 		} else {
 			b.WriteString(fmt.Sprintf("This is the opening of the themed part. Share your first view briefly through your own work or hobby, and ask the partner's view.\nTheme opening: %s\n", theme.Scenario.Hello))
 		}
-	case speakerTurns == 0:
+	case phase == model.PhaseNetworking && speakerTurns == 1 && len(msgs) == 2 && msgs[0].From == speaker.Address:
+		// The greeting messages are exchanged (both are stored user
+		// greetings, no questions): the chat opener continues with the
+		// first question of the conversation instead of re-introducing.
 		if russian {
-			b.WriteString(fmt.Sprintf("Знакомство: коротко и по-человечески представься %s — назови имя и чем занимаешься. Естественно спроси, чем %s сейчас увлекается или занят(а). Не звучай как анкета.\n", listener.Name, listener.Name))
+			b.WriteString(fmt.Sprintf("Приветствия уже обменяны: вы уже представились в своём приветствии — не представляйтесь снова.\nПродолжите разговор: естественно отреагируйте на приветствие %s и задайте один короткий открытый вопрос о его занятии или увлечении.\n", listener.Name))
 		} else {
-			b.WriteString(fmt.Sprintf("INTRO: introduce yourself to %s casually—your name and what you do. Naturally ask what they are into or focused on lately; don't sound like a questionnaire.\n", listener.Name))
+			b.WriteString(fmt.Sprintf("The greeting messages have been exchanged: you already introduced yourself in your greeting - do not introduce yourself again.\nContinue the conversation: respond naturally to %s's greeting, then ask ONE short open question about their work, business or hobby.\n", listener.Name))
 		}
 	case phase == model.PhaseDebate:
 		if russian {

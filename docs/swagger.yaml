@@ -104,6 +104,9 @@ definitions:
         type: string
       deleted_at:
         type: string
+      greeting:
+        example: Hi, I'm Alice — I paint watercolor postcards.
+        type: string
       name:
         example: Alice
         type: string
@@ -170,11 +173,21 @@ definitions:
     type: object
   server.CreateUserRequest:
     properties:
+      language:
+        description: 'Language of the generated greeting: "en" (default) or "ru".'
+        type: string
       name:
         type: string
       private_bio:
         type: string
       public_bio:
+        type: string
+    type: object
+  server.GreetingResponse:
+    properties:
+      address:
+        type: string
+      greeting:
         type: string
     type: object
   server.KickoffResponse:
@@ -184,6 +197,11 @@ definitions:
       cleared:
         type: integer
       speaker:
+        type: string
+    type: object
+  server.PutUserGreetingRequest:
+    properties:
+      greeting:
         type: string
     type: object
   server.SendMessageRequest:
@@ -806,6 +824,113 @@ paths:
       summary: list messages of a room user chat
       tags:
       - messages
+  /api/room/{room}/user/{address}/greeting:
+    get:
+      description: Returns the greeting (hello) message of a non-deleted user.
+      parameters:
+      - description: Room address
+        in: path
+        name: room
+        required: true
+        type: string
+      - description: User address
+        in: path
+        name: address
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.GreetingResponse'
+        "404":
+          description: Not Found
+          schema:
+            type: string
+      summary: get user greeting
+      tags:
+      - users
+    put:
+      consumes:
+      - application/json
+      description: 'Stores the greeting (hello) message of a non-deleted user. The
+        greeting must be non-empty and must not contain questions: it opens every
+        new chat of the user.'
+      parameters:
+      - description: Room address
+        in: path
+        name: room
+        required: true
+        type: string
+      - description: User address
+        in: path
+        name: address
+        required: true
+        type: string
+      - description: Greeting to set
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/server.PutUserGreetingRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.GreetingResponse'
+        "400":
+          description: Bad Request
+          schema:
+            type: string
+        "404":
+          description: Not Found
+          schema:
+            type: string
+      summary: set user greeting
+      tags:
+      - users
+  /api/room/{room}/user/{address}/greeting/regenerate:
+    post:
+      description: Re-generates the greeting (hello) message of a non-deleted user
+        from their bios. The optional language query parameter selects "en" (default)
+        or "ru".
+      parameters:
+      - description: Room address
+        in: path
+        name: room
+        required: true
+        type: string
+      - description: User address
+        in: path
+        name: address
+        required: true
+        type: string
+      - description: 'Greeting language: en (default) or ru'
+        in: query
+        name: language
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.GreetingResponse'
+        "400":
+          description: Bad Request
+          schema:
+            type: string
+        "404":
+          description: Not Found
+          schema:
+            type: string
+      summary: regenerate user greeting
+      tags:
+      - users
   /api/user/{address}/chat:
     get:
       description: Returns every chat the user participates in, newest first.
