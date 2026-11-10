@@ -4,6 +4,12 @@
 branch=$(git symbolic-ref --quiet --short HEAD || true)
 [ "$branch" = "dev" ] || exit 0
 
+# A squash landing creates no merge commit: `git merge --squash` leaves
+# SQUASH_MSG behind and the staged diff is committed as a plain commit.
+# Skip the check, otherwise it misfires whenever dev's tip is itself a
+# merge commit (HEAD^2 would resolve to that merge's second parent).
+[ -f "$(git rev-parse --git-dir)/SQUASH_MSG" ] && exit 0
+
 p2=$(git rev-parse "HEAD^2" 2>/dev/null) || exit 0
 main_local=$(git rev-parse refs/heads/main 2>/dev/null)
 main_remote=$(git rev-parse refs/remotes/origin/main 2>/dev/null)
