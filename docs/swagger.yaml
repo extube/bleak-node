@@ -1,5 +1,27 @@
 basePath: /
 definitions:
+  model.Chat:
+    properties:
+      address:
+        example: 0xchat123
+        type: string
+      created_at:
+        type: string
+      language:
+        example: en
+        type: string
+      phase:
+        example: networking
+        type: string
+      phase_started_at:
+        type: string
+      room:
+        example: 0xroom123
+        type: string
+      scenario:
+        example: ai-future
+        type: string
+    type: object
   model.Handshake:
     properties:
       created_at:
@@ -104,6 +126,9 @@ definitions:
         type: string
       created_at:
         type: string
+      language:
+        example: en
+        type: string
       participants:
         items:
           $ref: '#/definitions/model.Participant'
@@ -168,6 +193,11 @@ definitions:
       from:
         type: string
       to:
+        type: string
+    type: object
+  server.SetChatLanguageRequest:
+    properties:
+      language:
         type: string
     type: object
   server.UpdateRoomRequest:
@@ -242,6 +272,42 @@ paths:
           schema:
             type: string
       summary: kick off chat
+      tags:
+      - chats
+  /api/chat/{address}/language:
+    patch:
+      consumes:
+      - application/json
+      description: Sets the language used for generated chat prompts and messages.
+        Supported values are en and ru.
+      parameters:
+      - description: Chat address
+        in: path
+        name: address
+        required: true
+        type: string
+      - description: Chat language
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/server.SetChatLanguageRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.Chat'
+        "400":
+          description: Bad Request
+          schema:
+            type: string
+        "404":
+          description: Not Found
+          schema:
+            type: string
+      summary: set chat language
       tags:
       - chats
   /api/chat/{address}/message:

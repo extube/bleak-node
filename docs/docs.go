@@ -88,6 +88,59 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/chat/{address}/language": {
+            "patch": {
+                "description": "Sets the language used for generated chat prompts and messages. Supported values are en and ru.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "chats"
+                ],
+                "summary": "set chat language",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Chat address",
+                        "name": "address",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Chat language",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.SetChatLanguageRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/model.Chat"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/api/chat/{address}/message": {
             "get": {
                 "description": "Returns every message in the chat, oldest first.",
@@ -847,6 +900,37 @@ const docTemplate = `{
         }
     },
     "definitions": {
+        "model.Chat": {
+            "type": "object",
+            "properties": {
+                "address": {
+                    "type": "string",
+                    "example": "0xchat123"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "language": {
+                    "type": "string",
+                    "example": "en"
+                },
+                "phase": {
+                    "type": "string",
+                    "example": "networking"
+                },
+                "phase_started_at": {
+                    "type": "string"
+                },
+                "room": {
+                    "type": "string",
+                    "example": "0xroom123"
+                },
+                "scenario": {
+                    "type": "string",
+                    "example": "ai-future"
+                }
+            }
+        },
         "model.Handshake": {
             "type": "object",
             "properties": {
@@ -994,6 +1078,10 @@ const docTemplate = `{
                 "created_at": {
                     "type": "string"
                 },
+                "language": {
+                    "type": "string",
+                    "example": "en"
+                },
                 "participants": {
                     "type": "array",
                     "items": {
@@ -1091,6 +1179,14 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "to": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.SetChatLanguageRequest": {
+            "type": "object",
+            "properties": {
+                "language": {
                     "type": "string"
                 }
             }

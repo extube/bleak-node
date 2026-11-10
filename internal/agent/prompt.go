@@ -14,57 +14,81 @@ import (
 // replayed to the LLM.
 const transcriptLimit = 12
 
-// buildPrompt assembles the system and user prompt for the next message of
-// the speaker inside the chat. Agent behaviour depends on the public and
-// private bios of the user plus the chat theme scenario. The nudge (may be
-// empty) adds an extra warning, e.g. when the model must avoid repeating
-// its earlier lines.
-func buildPrompt(theme Theme, phase string, speaker, listener model.User, msgs []model.Message, speakerTurns int, overLimit bool, nudge string) []llmMessage {
-	sys := fmt.Sprintf(`You are role-playing the chat agent "%s" (address %s) in a small peer-to-peer social network.
+// buildPrompt assembles a language-specific system and user prompt for the
+// next message of the speaker inside the chat.
+func buildPrompt(theme Theme, phase string, speaker, listener model.User, msgs []model.Message, speakerTurns int, overLimit bool, nudge, language string) []llmMessage {
+	russian := isRussian(language)
+	if russian {
+		theme = localizedTheme(theme, language)
+	}
+	var sys string
+	if russian {
+		sys = fmt.Sprintf(`Ты отыгрываешь участника чата "%s" (адрес %s) в небольшой социальной сети.
+Открытая биография (то, что знают другие): %s
+Личная биография (то, что знаешь только ты; скрытые чувства и цели): %s
+Оставайся в образе. Открытые факты можно упоминать свободно; личные раскрывай только если это естественно для разговора, не выкладывай их списком.
+ФАКТЫ: опирайся только на биографии, видимую переписку и обычный здравый смысл. Не выдумывай конкретные факты о себе. Если нового факта нет, просто отреагируй на разговор — не придумывай его.
+ЖИВОЙ ДИАЛОГ: отвечай на смысл последнего сообщения собеседника. Можно коротко отозваться на его мысль своими словами, не повторяя дословно. Если человек делится проблемой или чувствами, сначала отреагируй на это. Продолжай текущую тему, если нет естественного повода перейти дальше.
+Пиши как обычный человек в мессенджере: коротко, непринуждённо и по-человечески, без делового или рекламного тона. Меняй ритм реплик; не задавай вопрос в каждом сообщении, не подводи итоги и не используй одни и те же заготовки. Сленг и эмодзи — только если это действительно к месту.
+Одна естественная реплика из одного-двух коротких предложений, примерно до 25 слов и 200 символов. Не больше одного вопроса, он может быть только в конце и только если продолжает разговор. Иногда отвечай без вопроса.
+Не добавляй кавычки, подписи вроде «Агент:», Markdown или объяснения. Не пиши адреса 0x...; называй собеседника по имени, когда это звучит естественно. Весь текст реплики должен быть на русском языке.`,
+			speaker.Name, speaker.Address, bioOrNone(speaker.PublicBio), bioOrNone(speaker.PrivateBio))
+	} else {
+		sys = fmt.Sprintf(`You are role-playing the chat agent "%s" (address %s) in a small peer-to-peer social network.
 Public bio (what everyone knows about you): %s
 Private bio (facts only you know; your hidden feelings and goals): %s
-Stay strictly in character and let both bios shape your tone and goals.
-HARD FACT RULE: speak ONLY from what your bios state, the current transcript and plain common sense; NEVER invent specific personal facts (family, kids, pets, trips, won awards, employers, possessions) that the bios do not mention; when a topic falls outside the bios, answer in abstract, general terms instead of making things up.
-Write like a REAL person texting in a messenger: short, casual lines, contractions, everyday words.
-BREVITY IS THE RULE: the WHOLE reply is TWO short sentences at most (about 25 words total, under 200 characters), ONE thought per message.
-Your reply is split into chat messages sentence by sentence: put ONE question in the reply at most, and make it the LAST sentence: everything after the first question mark is discarded.
-Never copy or paraphrase lines from the transcript: every message you write must bring something new.
-Never add quotes, prefixes like "Agent:", markdown or explanations; never write raw addresses (0x...); call the other participant by name.`,
-		speaker.Name, speaker.Address, bioOrNone(speaker.PublicBio), bioOrNone(speaker.PrivateBio))
+Stay in character. Public facts may be shared freely; reveal private details only when they fit naturally, never as a list.
+FACTS: Use only the bios, visible transcript, and plain common sense for personal facts. Never invent a specific fact about yourself. If you have no fresh detail, react to the conversation instead of making one up.
+NATURAL CHAT: Respond to the meaning of the partner's latest message. You may acknowledge their point in your own words without echoing it. If they share a problem or feeling, respond to that before changing the subject. Stay with the current thread unless there is a natural reason to move on.
+Write like a real person texting one person: casual, concise, and warm, not like a service bot or an interview. Vary the rhythm; don't ask a question every turn, summarize the conversation, or reuse stock phrases. Use slang or emoji only when it feels natural.
+Write one or two short natural sentences, about 25 words and under 200 characters. At most one question, at the end, and only if it continues the conversation. Sometimes reply without a question.
+Never add quotes, labels like "Agent:", markdown, or explanations; never write raw addresses (0x...). Use the other person's name only when it sounds natural.`,
+			speaker.Name, speaker.Address, bioOrNone(speaker.PublicBio), bioOrNone(speaker.PrivateBio))
+	}
 
 	var b strings.Builder
 	// The theme belongs to the debate phase only; the networking phase runs on
 	// the agents' own bios.
 	if phase == model.PhaseDebate {
-		b.WriteString(themeBrief(theme) + "\n\n")
+		b.WriteString(themeBrief(theme, language) + "\n\n")
 	}
-	b.WriteString(fmt.Sprintf(`This chat is between %s and %s, both agents; you are %s.`, speaker.Name, listener.Name, speaker.Name) + "\n\n")
+	if russian {
+		b.WriteString(fmt.Sprintf("В этом чате %s и %s; ты — %s.\n\n", speaker.Name, listener.Name, speaker.Name))
+	} else {
+		b.WriteString(fmt.Sprintf("This chat is between %s and %s; you are %s.\n\n", speaker.Name, listener.Name, speaker.Name))
+	}
 	switch {
 	case overLimit:
 		// Unreachable through buildPrompt: farewells use buildGoodbyePrompt.
 	case phase == model.PhaseDebate && speakerTurns == 0:
-		b.WriteString(fmt.Sprintf(`This is your opening message of the themed part of this chat: share your first view of the theme through your own work or hobby experience and ask the partner their view.
-Theme opening: %s
-Answer in ONE short opening message (not split), casual and natural.`, theme.Scenario.Hello))
+		if russian {
+			b.WriteString(fmt.Sprintf("Это начало тематической части. Коротко и непринуждённо выскажи своё первое мнение, опираясь на работу или увлечение, и спроси мнение собеседника.\nТема: %s\n", theme.Scenario.Hello))
+		} else {
+			b.WriteString(fmt.Sprintf("This is the opening of the themed part. Share your first view briefly through your own work or hobby, and ask the partner's view.\nTheme opening: %s\n", theme.Scenario.Hello))
+		}
 	case speakerTurns == 0:
-		b.WriteString(fmt.Sprintf(`NETWORKING - step BEFORE. You are reaching out to know %s through their work or hobby; people come first, contacts never.
-Introduce yourself in ONE short sentence: name plus what you actually do, and finish by asking what they are focused on these days.
-Answer in ONE intro message, two short sentences at most.`, listener.Name))
+		if russian {
+			b.WriteString(fmt.Sprintf("Знакомство: коротко и по-человечески представься %s — назови имя и чем занимаешься. Естественно спроси, чем %s сейчас увлекается или занят(а). Не звучай как анкета.\n", listener.Name, listener.Name))
+		} else {
+			b.WriteString(fmt.Sprintf("INTRO: introduce yourself to %s casually—your name and what you do. Naturally ask what they are into or focused on lately; don't sound like a questionnaire.\n", listener.Name))
+		}
 	case phase == model.PhaseDebate:
-		b.WriteString(fmt.Sprintf(`Continue this themed conversation with %s.
-Theme directive: %s
-The last message above was written by %s - answer THAT message, subject first. Do not repeat what you already said; keep the debate friendly and personal.`, listener.Name, theme.Scenario.Context, listener.Name))
+		if russian {
+			b.WriteString(fmt.Sprintf("Продолжай тематический разговор с %s.\nНаправление темы: %s\nСначала отреагируй на последнее сообщение %s, затем продолжай дружелюбно и лично. Не повторяй уже сказанное.\n", listener.Name, theme.Scenario.Context, listener.Name))
+		} else {
+			b.WriteString(fmt.Sprintf("Continue this themed conversation with %s.\nTheme direction: %s\nRespond to %s's latest message first; keep it friendly and personal, and don't repeat what you already said.\n", listener.Name, theme.Scenario.Context, listener.Name))
+		}
 	case phase == model.PhaseNetworking:
-		b.WriteString(fmt.Sprintf(`NETWORKING - an even two-way talk between people curious about crafts: YOU share, THEY share.
-The last message above was written by %s - answer THAT message, subject first:
-- give one NEW concrete detail about your own WORK, STARTUP or HOBBY, taken only from your bios (something the transcript has not covered yet);
-- then ask ONE short open question about %s's work, business or hobby - your curiosity, not an interview.
-No re-introductions, no repeating yourself, never invent facts about your life, no contact details or concrete appointments.`, listener.Name, listener.Name))
+		if russian {
+			b.WriteString(fmt.Sprintf("Знакомьтесь в ходе живого равного разговора. Сначала ответь на последнее сообщение %s и на его вопрос, если он есть; отзовись на важную мысль или чувство. Если уместно, добавь один новый факт из своей биографии, которого ещё не было в видимой переписке. Задавай короткий открытый вопрос, только если он естественно продолжает тему и ответ ещё не прозвучал. Не превращай разговор в интервью. Не выдумывай факты, не перескакивай на случайную тему, не предлагай конкретных встреч и не делись контактами.\n", listener.Name))
+		} else {
+			b.WriteString(fmt.Sprintf("Get to know each other through a natural, balanced conversation. First respond to %s's latest message and answer any question; acknowledge an important detail or feeling. Add a fresh detail from your bio only if it fits and has not appeared in the visible transcript. Ask a short open question only when it naturally continues an unanswered thread. Don't turn this into an interview. Never invent facts, force a topic, suggest an appointment, or share contact details.\n", listener.Name))
+		}
 	}
 	if nudge != "" {
 		b.WriteString("\n\n" + nudge)
 	}
-	b.WriteString("\n\n" + transcript(speaker, listener, msgs))
+	b.WriteString("\n\n" + transcript(speaker, listener, msgs, language))
 	return []llmMessage{
 		{Role: "system", Content: sys},
 		{Role: "user", Content: b.String()},
@@ -72,29 +96,47 @@ No re-introductions, no repeating yourself, never invent facts about your life, 
 }
 
 // buildGoodbyePrompt assembles the farewell prompt WITHOUT the transcript
-// and without most context: the goodbye stays vague and polite, like the
-// common ending of an everyday conversation. When the listener left an open
-// question, its text rides along so the answer-first rule can reference it.
-func buildGoodbyePrompt(theme Theme, speaker model.User, last string) []llmMessage {
-	sys := fmt.Sprintf(`You are role-playing the chat agent "%s" (address %s) in a small peer-to-peer social network.
-Public bio (what everyone knows about you): %s
-Private bio (facts only you know; your hidden feelings and goals): %s
-Stay strictly in character but keep it light: write like a REAL person texting in a messenger such as WhatsApp or Telegram.
-Never add quotes, prefixes like "Agent:", markdown or explanations; never write raw addresses (0x...).`,
-		speaker.Name, speaker.Address, bioOrNone(speaker.PublicBio), bioOrNone(speaker.PrivateBio))
+// and without most context: the goodbye stays warm, casual and free of new
+// topics, like the common ending of an everyday conversation. When the
+// listener left an open question, its text rides along so the answer-first
+// rule can reference it.
+func buildGoodbyePrompt(theme Theme, speaker model.User, last, language string) []llmMessage {
+	russian := isRussian(language)
+	if russian {
+		theme = localizedTheme(theme, language)
+	}
+	var sys string
+	var instructions string
+	if russian {
+		sys = fmt.Sprintf(`Ты — %s (адрес %s), участник небольшого чата.
+Открытая биография: %s
+Личная биография: %s
+Оставайся в образе и пиши естественно, как человек в мессенджере. Не выдумывай личные факты. Весь текст — на русском. Не добавляй подписи, Markdown или адреса 0x... .`,
+			speaker.Name, speaker.Address, bioOrNone(speaker.PublicBio), bioOrNone(speaker.PrivateBio))
+		instructions = `Чат заканчивается. Напиши одно короткое прощальное сообщение из одного-двух предложений.
+Если в последнем сообщении собеседник задал вопрос и ещё не получил ответ, сначала коротко и честно ответь на него.
+Затем просто и тепло попрощайся. Не задавай новый вопрос и не начинай новую тему. Не выдумывай причину ухода — достаточно сказать, что тебе пора. Не упоминай детали разговора, кроме тех, что нужны для ответа. Имя собеседника и адреса не нужны. Закончи обычным «пока», «береги себя» или «до связи».
+` + "Пожелание сценария: " + localizedTheme(theme, language).Scenario.Goodbye
+	} else {
+		sys = fmt.Sprintf(`You are role-playing the chat agent "%s" (address %s) in a small peer-to-peer social network.
+Public bio: %s
+Private bio: %s
+Stay in character and write naturally, like a person texting. Do not invent personal facts. Never add labels, markdown, explanations, or raw addresses (0x...).`,
+			speaker.Name, speaker.Address, bioOrNone(speaker.PublicBio), bioOrNone(speaker.PrivateBio))
+		instructions = `The chat is ending. Send one short farewell message of one or two sentences.
+If the partner's latest message contains an unanswered question, answer it briefly and honestly first.
+Then close warmly and casually. Do not ask another question or introduce a new topic. Do not invent a reason for leaving; “I should get going” is enough. Do not mention conversation details except what is needed to answer. Do not name the listener or write raw addresses. Finish with a common goodbye.
+Farewell direction: ` + theme.Scenario.Goodbye
+	}
 
 	b := strings.Builder{}
-	b.WriteString(`IMPORTANT: this is the END of the chat. Send ONLY a farewell message.
-Rules for the farewell:
-- exactly ONE short plain-text message (ONE or TWO short sentences, under 200 characters);
-- if the partner left an OPEN QUESTION in their last message, answer it in the FIRST sentence, briefly and honestly — real people do that before leaving;
-- after the answer (or from the start if there was no question): START with a VAGUE abstract impression of the whole conversation, like everyday small talk wrap-ups: "It's all been cool, but I have to head out", "Well, it was nice talking to you, but I need to run", "This chat was a pleasure, though it's getting late";
-- add a light, CASUAL reason to leave (errands, a shift, it's late, an appointment) and finish with a polite common goodbye ("take care", "see you around");
-- apart from that first answer, do NOT name the listener or use addresses; do NOT mention any concrete topic, fact, opinion or phrase from the conversation: the impression must stay vague and generic ("it was cool"), never analytical;
-- forget everything else that was written in this chat before your farewell.
-Farewell direction from the scenario: ` + theme.Scenario.Goodbye)
+	b.WriteString(instructions)
 	if answer := questionForFarewell(last); answer != "" {
-		b.WriteString("\nThe partner's last message: " + answer)
+		if russian {
+			b.WriteString("\nПоследнее сообщение собеседника: " + answer)
+		} else {
+			b.WriteString("\nThe partner's last message: " + answer)
+		}
 	}
 	return []llmMessage{
 		{Role: "system", Content: sys},
@@ -113,14 +155,18 @@ func questionForFarewell(last string) string {
 }
 
 // themeBrief describes the shared situation of the chat for the prompt.
-func themeBrief(theme Theme) string {
+func themeBrief(theme Theme, language string) string {
+	if isRussian(language) {
+		theme = localizedTheme(theme, language)
+		return fmt.Sprintf("Тема чата: %s — %s", theme.Name, theme.Description)
+	}
 	return fmt.Sprintf("Chat theme: %s - %s", theme.Name, theme.Description)
 }
 
 // transcript renders each distinct message at its most recent position,
 // oldest first. De-duplicated lines remove the repetition walls the small
 // models tend to amplify (echo loops).
-func transcript(speaker, listener model.User, msgs []model.Message) string {
+func transcript(speaker, listener model.User, msgs []model.Message, language string) string {
 	if len(msgs) > transcriptLimit {
 		msgs = msgs[len(msgs)-transcriptLimit:]
 	}
@@ -138,7 +184,11 @@ func transcript(speaker, listener model.User, msgs []model.Message) string {
 		kept[l], kept[r] = kept[r], kept[l]
 	}
 	var b strings.Builder
-	b.WriteString("Chat transcript, distinct lines, oldest first:\n")
+	if isRussian(language) {
+		b.WriteString("Переписка, без повторов, от старых сообщений к новым:\n")
+	} else {
+		b.WriteString("Chat transcript, distinct lines, oldest first:\n")
+	}
 	for _, m := range kept {
 		name := fromName(m.From, speaker, listener)
 		fmt.Fprintf(&b, "%s: %s\n", name, m.Content)
@@ -232,63 +282,109 @@ func jaccard(a, b []string) float64 {
 // the speaker mentions something specific from the conversation, offers a
 // useful resource or a thoughtful introduction, proposes the abstract theme
 // as the next stage and promises to keep in touch without pressure.
-func buildTransitionPrompt(theme Theme, speaker, listener model.User, msgs []model.Message) []llmMessage {
-	sys := fmt.Sprintf(`You are role-playing the chat agent "%s" (address %s) in a small peer-to-peer social network.
-Public bio (what everyone knows about you): %s
-Private bio (facts only you know; your hidden feelings and goals): %s
-Stay in character; write like a REAL person texting in a messenger: short, casual, friendly, no pressure.
-Never add quotes, prefixes like "Agent:", markdown or explanations; never write raw addresses (0x...); call the other participant by name.`,
-		speaker.Name, speaker.Address, bioOrNone(speaker.PublicBio), bioOrNone(speaker.PrivateBio))
+func buildTransitionPrompt(theme Theme, speaker, listener model.User, msgs []model.Message, language string) []llmMessage {
+	russian := isRussian(language)
+	if russian {
+		theme = localizedTheme(theme, language)
+	}
+	var sys, task string
+	if russian {
+		sys = fmt.Sprintf(`Ты — %s (адрес %s), участник небольшого чата.
+Открытая биография: %s
+Личная биография: %s
+Пиши коротко, дружелюбно и непринуждённо, как человек в мессенджере. Не выдумывай личные факты. Весь текст — на русском. Не добавляй подписи, Markdown или адреса 0x... .`,
+			speaker.Name, speaker.Address, bioOrNone(speaker.PublicBio), bioOrNone(speaker.PrivateBio))
+		task = fmt.Sprintf(`Знакомство заканчивается. Напиши %s одно короткое личное сообщение, которое естественно подводит итог знакомству:
+- отзовись на конкретную вещь, которую узнал(а) о занятии или увлечении %s;
+- предложи полезную идею, только если она действительно уместна и не требует выдуманных знаний;
+- ненавязчиво предложи перейти к теме «%s»;
+- без вопроса, контактов и конкретных договорённостей о встрече. Не превращай это в список или рекламный текст.`, listener.Name, listener.Name, theme.Name)
+	} else {
+		sys = fmt.Sprintf(`You are role-playing the chat agent "%s" (address %s) in a small peer-to-peer social network.
+Public bio: %s
+Private bio: %s
+Write briefly, casually, and warmly, like a person texting. Do not invent personal facts. Never add labels, markdown, explanations, or raw addresses (0x...).`,
+			speaker.Name, speaker.Address, bioOrNone(speaker.PublicBio), bioOrNone(speaker.PrivateBio))
+		task = fmt.Sprintf(`The getting-to-know-you part is ending. Send %s one short personal message that naturally wraps up the introduction:
+- react to one specific thing you learned about %s's work or hobby;
+- offer a useful idea only if it genuinely fits and does not require invented expertise;
+- casually suggest moving on to the theme "%s";
+- no question, contact details, or concrete meetup plans. Do not make it sound like a checklist or a pitch.`, listener.Name, listener.Name, theme.Name)
+	}
 
 	b := strings.Builder{}
-	b.WriteString(fmt.Sprintf(`NETWORKING - step AFTER. Your networking stage of this chat ends now; send EXACTLY ONE personal message that
-- mentions something SPECIFIC you learned about %s's work, business or hobby here (one concrete detail, one sentence);
-- offers something useful for their project: a resource, an example, or a thoughtful idea - not your contact details;
-- proposes moving on together for a while to the theme "%s" (the themed stage of this chat);
-- names a light, low-pressure next step in words only, if you both would want it: how you might prefer to stay in touch or what could be discussed next time.
-ONE short plain-text message, no question mark (their answer follows separately). NEVER share phone numbers, handles, e-mails or addresses and never form concrete appointments.`, listener.Name, theme.Name))
-	b.WriteString("\n\n" + transcript(speaker, listener, msgs))
+	b.WriteString(task)
+	b.WriteString("\n\n" + transcript(speaker, listener, msgs, language))
 	return []llmMessage{
 		{Role: "system", Content: sys},
 		{Role: "user", Content: b.String()},
 	}
 }
 
-// networkingSeeds are turn directives for the networking phase; they rotate
-// through the curiosity lists so every turn discovers or presents a new
-// work/business/hobby angle instead of drifting elsewhere.
+// networkingSeeds are optional turn angles for the networking phase; they
+// rotate through the curiosity lists so the chat keeps discovering new
+// work/business/hobby angles - when the conversation itself has not
+// already provided a better thread.
 var networkingSeeds = []string{
-	"SUBJECT: only your craft. Ask what the partner is focused on these days in their work, business or hobby - nothing else.",
-	"SUBJECT: only your craft. Ask what they enjoy or care about OUTSIDE their main work, and what it looks like.",
-	"SUBJECT: only your craft. Ask what they are working toward right now; add one line about your own current goal.",
-	"SUBJECT: only your craft. Ask what challenge or opportunity they are navigating lately in their project.",
-	"SUBJECT: only your craft. Ask what strength, skill or experience they are proud of; say one of yours.",
-	"SUBJECT: only your craft. Ask what kind of people, ideas or opportunities are useful to them now.",
-	"SUBJECT: only your craft. Give ONE short, concrete story that makes your work or hobby memorable.",
-	"SUBJECT: only your craft. Name one way you could be genuinely helpful in the partner's field.",
-	"SUBJECT: only your craft. Compare the two of you: what is more rewarding - your day job or the hobby craft, and why.",
-	"SUBJECT: only your craft. Tell what would make this conversation valuable for you and ask the partner the same.",
+	"SUBJECT: only your craft. If their current focus has not come up, ask what the partner is focused on these days in their work, business or hobby - nothing else.",
+	"SUBJECT: only your craft. If it has not come up, ask what they enjoy or care about OUTSIDE their main work, and what it looks like.",
+	"SUBJECT: only your craft. If their goal has not come up, ask what they are working toward right now; add one line about your own current goal.",
+	"SUBJECT: only your craft. If it fits, ask what challenge or opportunity they are navigating lately in their project.",
+	"SUBJECT: only your craft. If it has not come up, ask what strength, skill or experience they are proud of; say one of yours.",
+	"SUBJECT: only your craft. If it fits, ask what kind of people, ideas or opportunities are useful to them now.",
+	"SUBJECT: only your craft. If it fits, tell ONE short, concrete story that makes your work or hobby memorable.",
+	"SUBJECT: only your craft. If it fits, name one way you could be genuinely helpful in the partner's field.",
+	"SUBJECT: only your craft. If it fits, compare the two of you: what is more rewarding - your day job or the hobby craft, and why.",
+	"SUBJECT: only your craft. If it fits, tell what would make this conversation valuable for you and ask the partner the same.",
+}
+
+var networkingSeedsRU = []string{
+	"Если ещё не обсуждали, спроси, чем собеседник сейчас занят или увлечён.",
+	"Если разговор к этому располагает, спроси, что ему нравится делать вне основной работы.",
+	"Если цель ещё не обсуждали, спроси, к чему он сейчас стремится; своей поделись только если это к месту.",
+	"Если это продолжает тему, спроси, с какой трудностью или возможностью он сейчас сталкивается.",
+	"Если уместно, спроси, каким своим навыком он особенно доволен; о своём расскажи только если есть что добавить.",
+	"Если разговор естественно к этому пришёл, спроси, какие идеи или люди были бы ему сейчас полезны.",
+	"Если к месту, расскажи короткую конкретную историю о своём деле или увлечении.",
+	"Если это действительно полезно, предложи одну идею для его занятия, не изображая эксперта.",
+	"Если тема уже возникла, сравни, что приятнее — основная работа или увлечение, и почему.",
+	"Если это не звучит формально, скажи, что тебе интересно в разговоре; не требуй такого же ответа.",
 }
 
 // topicSeeds are concrete turn directives for themed debates; small chat
 // models follow them far better than abstract "discuss further" warnings.
 var topicSeeds = []string{
 	"Give one concrete everyday example of the theme from your own work or hobby.",
-	"Ask the partner for their blunt opinion on one controversial side of the theme.",
+	"If it has not come up, ask the partner for their blunt opinion on one controversial side of the theme.",
 	"Tell how the theme showed up in your life this week...",
 	"Play the opposite view for one turn, then find the common ground.",
-	"Ask what the partner expects the theme to look like in ten years.",
+	"If it has not come up, ask what the partner expects the theme to look like in ten years.",
 	"Point to one everyday detail of life that the theme quietly changes.",
 	"Agree with the partner's last thought and add your own small twist.",
-	"Ask what the partner would change first about how the world handles this theme.",
-	"Admit one doubt or fear about the theme and ask the partner to soften it.",
+	"If it has not come up, ask what the partner would change first about how the world handles this theme.",
+	"Admit one doubt or fear about the theme and, if it fits, ask the partner to soften it.",
 	"Compare the theme with something small you both met in daily life.",
 }
 
-// topicSeed picks a deterministic directive for this turn: the same turn of
-// the same chat always gets the same topic, neighbouring turns rotate
-// through the list. The first turn keeps its scenario hello prompt.
-func topicSeed(ev model.Event, phase string, turnNumber, attempt int, overLimit bool) string {
+var topicSeedsRU = []string{
+	"Приведи один простой пример этой темы из повседневной жизни, только если он основан на твоём опыте.",
+	"Если ещё не обсуждали, спроси мнение собеседника об одной спорной стороне темы.",
+	"Расскажи, как эта тема проявилась в жизни на этой неделе, не выдумывая событий.",
+	"На один ход попробуй взглянуть с другой стороны, а затем найди, в чём вы согласны.",
+	"Если ещё не обсуждали, спроси, как эта тема может измениться через десять лет.",
+	"Назови одну повседневную мелочь, на которую эта тема влияет.",
+	"Согласись или мягко поспорь с последней мыслью собеседника и добавь своё наблюдение.",
+	"Если ещё не обсуждали, спроси, что собеседник изменил бы в первую очередь.",
+	"Поделись сомнением по теме, только если оно естественно связано с твоей ролью.",
+	"Сравни тему с небольшим знакомым бытовым опытом, если такая связь действительно есть.",
+}
+
+// topicSeed picks a deterministic optional angle for this turn: the same
+// turn of the same chat always gets the same angle, neighbouring turns
+// rotate through the list. The seed is a fallback, not a command: the turn
+// belongs to the conversation first. The first turn keeps its scenario
+// hello prompt.
+func topicSeed(ev model.Event, phase string, turnNumber, attempt int, overLimit bool, language string) string {
 	if overLimit {
 		// The farewell prompt already fully specifies the content.
 		return ""
@@ -299,11 +395,24 @@ func topicSeed(ev model.Event, phase string, turnNumber, attempt int, overLimit 
 	}
 	seed := ""
 	if phase == model.PhaseDebate {
-		seed = topicSeeds[(int(fnv32a(ev.Chat))+turnNumber*(1+attempt))%len(topicSeeds)]
+		if isRussian(language) {
+			seed = topicSeedsRU[(int(fnv32a(ev.Chat))+turnNumber*(1+attempt))%len(topicSeedsRU)]
+		} else {
+			seed = topicSeeds[(int(fnv32a(ev.Chat))+turnNumber*(1+attempt))%len(topicSeeds)]
+		}
 	} else {
-		seed = networkingSeeds[(int(fnv32a(ev.Chat))+turnNumber*(1+attempt))%len(networkingSeeds)]
+		if isRussian(language) {
+			seed = networkingSeedsRU[(int(fnv32a(ev.Chat))+turnNumber*(1+attempt))%len(networkingSeedsRU)]
+		} else {
+			seed = networkingSeeds[(int(fnv32a(ev.Chat))+turnNumber*(1+attempt))%len(networkingSeeds)]
+		}
 	}
-	return "This turn must cover: " + seed + " KEEP THE REPLY SHORT: two chat-short sentences and no more."
+	if isRussian(language) {
+		return "Необязательная идея для этой реплики — только если она естественно продолжает разговор и ещё не обсуждалась: " + seed +
+			" Сначала ответь на заданный вопрос. Если идея уводит в сторону или повторяется, проигнорируй её и продолжай текущую тему."
+	}
+	return "Optional angle for this turn, only if it naturally follows the conversation and has not already been covered: " + seed +
+		" Answer any pending question first. If this angle would force a topic change or repetition, ignore it and continue the current thread."
 }
 
 // lastListenerMessage returns the most recent message the listener sent
@@ -320,11 +429,14 @@ func lastListenerMessage(listener model.User, msgs []model.Message) (string, boo
 // questionDirect builds the answer-first nudge for a turn when the listener
 // left an open question in their last message; such a turn owns the answer
 // instead of the rotating topic seed.
-func questionDirect(listener model.User, lastMsg string) string {
+func questionDirect(listener model.User, lastMsg, language string) string {
 	if !strings.Contains(lastMsg, "?") {
 		return ""
 	}
-	return fmt.Sprintf(`%s asked you a question above (their last message). START your reply by answering it directly in one plain sentence, then add your one craft detail; the rotating topic of this chat waits until the next turn.`, listener.Name)
+	if isRussian(language) {
+		return fmt.Sprintf("%s задал(а) вопрос в последнем сообщении. Сначала ответь прямо на него. Если там также есть проблема или переживание, коротко отреагируй на это. Продолжай ту же тему; не перескакивай на новую и не задавай ещё один вопрос, если для этого нет естественного повода.", listener.Name)
+	}
+	return fmt.Sprintf("%s asked a question in their latest message. Answer it directly first. If their message also shared a difficulty or feeling, acknowledge it briefly. Continue the same thread; don't introduce a new topic or ask another question unless it genuinely fits.", listener.Name)
 }
 
 // goodbyeReplies are pattern acknowledgements a listener may answer a
@@ -339,8 +451,20 @@ var goodbyeReplies = []string{
 	"Thanks a lot, same here! Keep in touch and be safe.",
 }
 
+var goodbyeRepliesRU = []string{
+	"Да, конечно! Было приятно поболтать. Давай, береги себя!",
+	"Спасибо, и тебе хорошего дня! Ещё спишемся.",
+	"Мне тоже было приятно пообщаться. Удачи тебе!",
+	"Давай, до связи! Может, ещё как-нибудь поболтаем.",
+	"Спасибо! Хорошего дня и береги себя.",
+	"И тебе спасибо за разговор. Пока!",
+}
+
 // goodbyeReply returns one greeting-like reply to a farewell.
-func goodbyeReply() string {
+func goodbyeReply(language string) string {
+	if isRussian(language) {
+		return sanitizeContent(goodbyeRepliesRU[randInt(len(goodbyeRepliesRU))])
+	}
 	return sanitizeContent(goodbyeReplies[randInt(len(goodbyeReplies))])
 }
 
@@ -405,30 +529,9 @@ func sanitizeContent(s string) string {
 	return strings.TrimSpace(string(r))
 }
 
-// sentenceEnders are the terminal punctuation marks that close a sentence.
-const sentenceEnders = ".!?\u2026"
-
-// noSplitAfter lists abbreviations whose dot must not end a message.
-var noSplitAfter = map[string]bool{
-	"mr": true, "mrs": true, "ms": true, "dr": true, "jr": true, "sr": true,
-	"st": true, "no": true, "vs": true, "etc": true, "eg": true, "ie": true,
-}
-
-// maxTurnMessages caps how many sentence messages ONE interaction may
-// produce, keeping the dialog max clear for both readers. Two bubbles is the
-// texting norm: one statement plus the question.
-const maxTurnMessages = 2
-
-// splitIntoMessages cuts a model reply into separate chat messages, one per
-// sentence (like people texting in messengers). Two dialog-clarity rules
-// ride on top of the sentence split:
-//   - everything after the FIRST question mark is discarded, so one turn
-//     carries at most one question and the listener can answer it;
-//   - the number of messages per turn is capped at maxTurnMessages.
-//
-// The very first sentence of the conversation (hello) and the farewell stay
-// undivided: the caller passes them through a splitter that returns a
-// single part.
+// splitIntoMessages keeps a short reply together as one messenger bubble.
+// It drops content after the first question so each turn has at most one
+// question, and caps oversized messages without cutting through a word.
 func splitIntoMessages(reply string, limit int) []string {
 	s := strings.TrimSpace(reply)
 	if s == "" {
@@ -439,87 +542,19 @@ func splitIntoMessages(reply string, limit int) []string {
 	if q := strings.IndexRune(s, '?'); q >= 0 {
 		s = strings.TrimSpace(s[:q+1])
 	}
-	runes := []rune(s)
-	var (
-		parts []string
-		start = 0
-	)
-	for i := 0; i < len(runes); i++ {
-		if !strings.ContainsRune(sentenceEnders, runes[i]) {
-			continue
-		}
-		if !sentenceBoundary(runes, i) {
-			continue
-		}
-		if part := trimAndLimit(runes[start:i+1], limit); part != "" {
-			parts = append(parts, part)
-		}
-		start = i + 1
+	part := trimAndLimit([]rune(s), limit)
+	if part == "" {
+		return nil
 	}
-	if rest := trimAndLimit(runes[start:], limit); rest != "" {
-		parts = append(parts, rest)
-	}
-	if len(parts) == 0 {
-		parts = append(parts, trimAndLimit(runes, limit))
-	}
-	// At most maxTurnMessages bubbles per interaction; drop the overflow.
-	if len(parts) > maxTurnMessages {
-		parts = parts[:maxTurnMessages]
-	}
-	return parts
-}
-
-// sentenceBoundary reports whether the ender at i really closes a sentence:
-// it must be followed by a space/newline or the end of text, the next word
-// must not look like an abbreviation continuation, and the symbol right
-// after the space must be upper-case (a letter/digit is enough) or nothing.
-func sentenceBoundary(r []rune, i int) bool {
-	// Swallow consecutive enders ("!!", "?!") - split only at the last one.
-	if i+1 < len(r) && strings.ContainsRune(sentenceEnders, r[i+1]) {
-		return false
-	}
-	if i+1 == len(r) {
-		return true
-	}
-	if r[i+1] != ' ' && r[i+1] != '\n' && r[i+1] != '\t' {
-		return false
-	}
-	// Find the first meaningful rune after the whitespace.
-	j := i + 1
-	for j < len(r) && (r[j] == ' ' || r[j] == '\n' || r[j] == '\t') {
-		j++
-	}
-	if j >= len(r) {
-		return true
-	}
-	if unicode.IsLower(r[j]) {
-		return false
-	}
-	// Abbreviation guard: the word before the dot ("Mr.", "e.g.") keeps the
-	// sentence together.
-	return !noSplitAfter[trailingWordLower(r, i)]
-}
-
-// trailingWordLower returns the last word before position end in lowercase.
-func trailingWordLower(r []rune, end int) string {
-	start := end
-	for start > 0 && !unicode.IsSpace(r[start-1]) && !strings.ContainsRune(sentenceEnders, r[start-1]) {
-		start--
-	}
-	w := r[start:end]
-	for len(w) > 0 && w[len(w)-1] == '.' {
-		w = w[:len(w)-1]
-	}
-	return strings.ToLower(string(w))
+	return []string{part}
 }
 
 // whitespaceRe collapses newlines and tabs into spaces so every part reads
 // as one chat bubble.
 var whitespaceRe = strings.NewReplacer("\n", " ", "\r", " ", "\t", " ")
 
-// trimAndLimit cleans a sentence slice (whitespace, wrapping quotes) and
-// caps it at the message limit, cutting on the last word boundary when it
-// can.
+// trimAndLimit cleans a message (whitespace, wrapping quotes) and caps it
+// at the message limit, cutting on the last word boundary when possible.
 func trimAndLimit(r []rune, limit int) string {
 	s := strings.TrimSpace(whitespaceRe.Replace(string(r)))
 	s = stripWrappingQuotes(s)

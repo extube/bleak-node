@@ -118,10 +118,16 @@ func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
 		w.log.Error("agent event failed",
 			"id", ev.ID, "type", ev.Type, "chat", ev.Chat,
 			"speaker", ev.Speaker, "listener", ev.Listener, "err", err)
+		// Finalize on a FRESH context: eventCtx is often exactly what
+		// expired (LLM timeout), and reusing it fails the requeue too,
+		// leaving the event stuck in "processing" until the orphan
+		// sweep reclaims it minutes later.
+		endCtx, endCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer endCancel()
 		if ev.Attempts+1 >= w.cfg.MaxAttempts {
-			return true, w.db.CompleteEvent(eventCtx, ev.ID, err.Error())
+			return true, w.db.CompleteEvent(endCtx, ev.ID, err.Error())
 		}
-		if rerr := w.db.RequeueEvent(eventCtx, ev.ID); rerr != nil {
+		if rerr := w.db.RequeueEvent(endCtx, ev.ID); rerr != nil {
 			return true, rerr
 		}
 		return true, nil
@@ -145,13 +151,11 @@ func (w *Worker) tick(ctx context.Context) {
 // process generates the next turn of the event speaker inside the chat and,
 // unless the speaker has spent its message quota, queues the turn of the
 // listener (the other agent) after saving the response. Every turn generates
-// exactly ONE next-turn event: a reply may be saved as several messages
-// (one per sentence, at most maxTurnMessages bubbles per interaction), but
-// the whole batch belongs to one interaction. Structure of a chat:
+// exactly ONE next-turn event: a reply is saved as one natural message bubble.
+// Structure of a chat:
 //   - the first message of EVERY participant is a self-introduction;
 //   - the middle part is the themed conversation;
-//   - the end is the speaker's farewell (abstract impression, no context)
-//     followed by the listener's pattern-based reply goodbye, without LLM.
+//   - the end is a warm farewell followed by a short localized reply, without LLM.
 func (w *Worker) process(ctx context.Context, ev model.Event) error {
 	if ev.Type != model.EventChatInteract {
 		// Unknown type: nothing to do, completing with the reason.
@@ -229,7 +233,7 @@ func (w *Worker) process(ctx context.Context, ev model.Event) error {
 	if overLimit && transition {
 		// The networking part closes with ONE message: an AFTER-step follow-up
 		// personal chat plus an offer to switch to the abstract theme.
-		out, err := w.llm.Complete(ctx, buildTransitionPrompt(theme, speaker, listener, msgs))
+		out, err := w.llm.Complete(ctx, buildTransitionPrompt(theme, speaker, listener, msgs, chat.Language))
 		if err != nil {
 			return err
 		}
@@ -238,12 +242,12 @@ func (w *Worker) process(ctx context.Context, ev model.Event) error {
 			return errors.New("llm returned an empty message")
 		}
 	} else if overLimit {
-		// The farewell is generated WITHOUT the transcript: a vague abstract
-		// impression of the chat, a casual reason to leave and a polite
-		// goodbye. When the listener left an open question, its text rides
-		// along so the farewell can answer it in the first sentence.
+		// The farewell is generated WITHOUT the transcript: a warm, casual
+		// goodbye with no new topic. When the listener left an open
+		// question, its text rides along so the farewell can answer it in
+		// the first sentence.
 		last, _ := lastListenerMessage(listener, msgs)
-		out, err := w.llm.Complete(ctx, buildGoodbyePrompt(theme, speaker, last))
+		out, err := w.llm.Complete(ctx, buildGoodbyePrompt(theme, speaker, last, chat.Language))
 		if err != nil {
 			return err
 		}
@@ -262,20 +266,24 @@ func (w *Worker) process(ctx context.Context, ev model.Event) error {
 		for attempt := 0; attempt <= w.cfg.EchoRetries; attempt++ {
 			nudge := ""
 			if speakerTurns > 0 {
-				nudge = topicSeed(ev, phase, speakerTurns, attempt, overLimit)
+				nudge = topicSeed(ev, phase, speakerTurns, attempt, overLimit, chat.Language)
 				// Answer-first rule: when the partner's last message asks an
 				// open question, the turn belongs to the answer, not to the
 				// rotating topic seed.
 				if last, _ := lastListenerMessage(listener, msgs); last != "" {
-					if direct := questionDirect(listener, last); direct != "" {
+					if direct := questionDirect(listener, last, chat.Language); direct != "" {
 						nudge = direct
 					}
 				}
 			}
 			if attempt > 0 {
-				nudge += " Your previous reply repeated an earlier line; write something NEW."
+				if isRussian(chat.Language) {
+					nudge += " Предыдущая реплика повторила уже сказанное; напиши по-новому и продолжай разговор."
+				} else {
+					nudge += " Your previous reply repeated an earlier line; write something new and continue the conversation."
+				}
 			}
-			prompt := buildPrompt(theme, phase, speaker, listener, msgs, speakerTurns, overLimit, nudge)
+			prompt := buildPrompt(theme, phase, speaker, listener, msgs, speakerTurns, overLimit, nudge, chat.Language)
 			out, err := w.llm.Complete(ctx, prompt)
 			if err != nil {
 				return err
@@ -365,7 +373,7 @@ func (w *Worker) process(ctx context.Context, ev model.Event) error {
 		// Reply goodbye: a pattern message of the listener, generated
 		// locally without the LLM and without the transcript. The chat ends
 		// here: no further event is queued.
-		reply := goodbyeReply()
+		reply := goodbyeReply(chat.Language)
 		replyMsgs, err := w.db.CreateMessages(ctx, ev.Listener, ev.Speaker, []string{reply})
 		if err != nil {
 			return err

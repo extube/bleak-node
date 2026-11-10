@@ -55,9 +55,8 @@ func (d *DB) CreateMessage(ctx context.Context, m *model.Message) error {
 // CreateMessages writes several messages of ONE interaction atomically:
 // the chat lookup and the user checks run once, and every message is
 // inserted within the same transaction. It is used by the agent worker for
-// replies split into one message per sentence (at most maxTurnMessages
-// bubbles per interaction); the caller queues a single next-turn event
-// after the whole batch, not one event per message.
+// replies saved as one natural message bubble per turn; the caller queues a
+// single next-turn event after the message.
 func (d *DB) CreateMessages(ctx context.Context, from, to string, contents []string) ([]model.Message, error) {
 	if len(contents) == 0 {
 		return nil, errors.Join(ErrInvalid, errors.New("no messages to create"))

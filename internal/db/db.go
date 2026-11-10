@@ -101,6 +101,7 @@ CREATE TABLE IF NOT EXISTS chats (
 	address          TEXT PRIMARY KEY,
 	room             TEXT NOT NULL DEFAULT '',
 	scenario         TEXT NOT NULL DEFAULT '',
+	language         TEXT NOT NULL DEFAULT 'en',
 	phase            TEXT NOT NULL DEFAULT '',
 	phase_started_at TEXT NOT NULL DEFAULT '',
 	created_at       TEXT NOT NULL
@@ -164,6 +165,9 @@ CREATE INDEX IF NOT EXISTS idx_events_status ON events(status, id);
 	}
 	// Chat themes: chats carry the scenario key resolved by the agent.
 	if err := d.ensureColumn(ctx, "chats", "scenario", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := d.ensureColumn(ctx, "chats", "language", "TEXT NOT NULL DEFAULT 'en'"); err != nil {
 		return err
 	}
 	// Two-part conversations: the mandatory networking phase precedes the

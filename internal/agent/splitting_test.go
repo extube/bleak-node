@@ -9,14 +9,14 @@ func TestSplitIntoMessagesRules(t *testing.T) {
 		want  []string
 	}{
 		{
-			name:  "question closes the reply, rest dropped",
+			name:  "question closes a single bubble, rest dropped",
 			reply: "Nice to meet you. Where are you from? I also love fishing. By the way do you like coffee?",
-			want:  []string{"Nice to meet you.", "Where are you from?"},
+			want:  []string{"Nice to meet you. Where are you from?"},
 		},
 		{
-			name:  "no question, at most two sentences",
+			name:  "multiple sentences stay together in one bubble",
 			reply: "One. Two. Three. Four. Five.",
-			want:  []string{"One.", "Two."},
+			want:  []string{"One. Two. Three. Four. Five."},
 		},
 		{
 			name:  "oversized single sentence is capped at the limit",
@@ -25,12 +25,12 @@ func TestSplitIntoMessagesRules(t *testing.T) {
 		{
 			name:  "question closes the reply even mid-list",
 			reply: "Mr. Bond, nice to see you. How are you? I am fine too. See you soon!",
-			want:  []string{"Mr. Bond, nice to see you.", "How are you?"},
+			want:  []string{"Mr. Bond, nice to see you. How are you?"},
 		},
 		{
 			name:  "abbreviations keep sentences together",
 			reply: "Mr. Bond, nice. How are you?",
-			want:  []string{"Mr. Bond, nice.", "How are you?"},
+			want:  []string{"Mr. Bond, nice. How are you?"},
 		},
 		{
 			name:  "short single sentence stays whole",
@@ -44,8 +44,8 @@ func TestSplitIntoMessagesRules(t *testing.T) {
 		}
 		got := splitIntoMessages(tc.reply, 255)
 		if tc.want == nil {
-			// Only invariants checked: everything within the limit, at most
-			// one bubble carrying the (trimmed) question.
+			// Only invariants checked: the whole reply stays one bubble within
+			// the message limit.
 			for _, p := range got {
 				if len(p) > 255 {
 					t.Fatalf("%s: part over the limit (%d): %q", tc.name, len(p), p)

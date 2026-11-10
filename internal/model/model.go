@@ -47,6 +47,7 @@ type Chat struct {
 	Address        string     `json:"address" example:"0xchat123"`
 	Room           string     `json:"room" example:"0xroom123"`
 	Scenario       string     `json:"scenario" example:"ai-future"`
+	Language       string     `json:"language" example:"en"`
 	Phase          string     `json:"phase" example:"networking"`
 	PhaseStartedAt *time.Time `json:"phase_started_at"`
 	CreatedAt      time.Time  `json:"created_at"`

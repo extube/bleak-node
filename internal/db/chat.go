@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/extube/bleak-node/internal/model"
@@ -20,7 +21,7 @@ type rowQuerier interface {
 // from == to never matches anything by construction.
 func findChat(ctx context.Context, q rowQuerier, a, b string) (model.Chat, bool, error) {
 	row := q.QueryRowContext(ctx, `
-SELECT c.address, c.room, c.scenario, c.phase, c.phase_started_at, c.created_at
+SELECT c.address, c.room, c.scenario, c.language, c.phase, c.phase_started_at, c.created_at
 FROM chats c
 JOIN participants p1 ON p1.chat = c.address AND p1.user = ?
 JOIN participants p2 ON p2.chat = c.address AND p2.user = ?
@@ -33,7 +34,7 @@ LIMIT 1`, a, b)
 		createdAt string
 		startedAt string
 	)
-	if err := row.Scan(&c.Address, &c.Room, &c.Scenario, &c.Phase, &startedAt, &createdAt); err != nil {
+	if err := row.Scan(&c.Address, &c.Room, &c.Scenario, &c.Language, &c.Phase, &startedAt, &createdAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return model.Chat{}, false, nil
 		}
@@ -53,13 +54,13 @@ func ensureChat(ctx context.Context, q rowQuerier, room, a, b string) (model.Cha
 		return c, false, err
 	}
 
-	c = model.Chat{Room: room, CreatedAt: time.Now().UTC()}
+	c = model.Chat{Room: room, Language: "en", CreatedAt: time.Now().UTC()}
 	for attempt := 0; attempt < 3; attempt++ {
 		c.Address = newAddress(16)
 		if _, err := q.ExecContext(ctx,
-			`INSERT INTO chats (address, room, scenario, phase, phase_started_at, created_at)
-			 VALUES (?, ?, ?, ?, ?, ?)`,
-			c.Address, c.Room, "", "", "", c.CreatedAt.Format(time.RFC3339)); !isUnique(err) {
+			`INSERT INTO chats (address, room, scenario, language, phase, phase_started_at, created_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			c.Address, c.Room, "", c.Language, "", "", c.CreatedAt.Format(time.RFC3339)); !isUnique(err) {
 			if err != nil {
 				return model.Chat{}, false, err
 			}
@@ -109,13 +110,13 @@ func (d *DB) GetChat(ctx context.Context, address string) (model.Chat, []model.P
 // ChatByAddress returns a chat by its address.
 func (d *DB) ChatByAddress(ctx context.Context, address string) (model.Chat, bool, error) {
 	row := d.QueryRowContext(ctx,
-		`SELECT address, room, scenario, phase, phase_started_at, created_at FROM chats WHERE address = ?`, address)
+		`SELECT address, room, scenario, language, phase, phase_started_at, created_at FROM chats WHERE address = ?`, address)
 	var (
 		c         model.Chat
 		createdAt string
 		startedAt string
 	)
-	if err := row.Scan(&c.Address, &c.Room, &c.Scenario, &c.Phase, &startedAt, &createdAt); err != nil {
+	if err := row.Scan(&c.Address, &c.Room, &c.Scenario, &c.Language, &c.Phase, &startedAt, &createdAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return model.Chat{}, false, nil
 		}
@@ -124,6 +125,27 @@ func (d *DB) ChatByAddress(ctx context.Context, address string) (model.Chat, boo
 	c.PhaseStartedAt = parseNullTS(sql.NullString{String: startedAt, Valid: startedAt != ""})
 	c.CreatedAt = parseTS(createdAt)
 	return c, true, nil
+}
+
+// SetChatLanguage stores the response language for a chat. Empty language
+// values default to English; only supported language codes are accepted.
+func (d *DB) SetChatLanguage(ctx context.Context, address, language string) error {
+	language = strings.ToLower(strings.TrimSpace(language))
+	if language == "" {
+		language = "en"
+	}
+	if language != "en" && language != "ru" {
+		return errors.Join(ErrInvalid, fmt.Errorf("unsupported chat language %q (use en or ru)", language))
+	}
+	res, err := d.ExecContext(ctx,
+		`UPDATE chats SET language = ? WHERE address = ?`, language, address)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		return errors.Join(ErrNotFound, fmt.Errorf("chat %q not found", address))
+	}
+	return nil
 }
 
 // ChatScenario returns the scenario key stored on the chat. The bool
@@ -221,7 +243,7 @@ func (d *DB) ChatParticipants(ctx context.Context, chatAddress string) ([]model.
 // ListUserChats returns all chats the user participates in, newest first.
 func (d *DB) ListUserChats(ctx context.Context, user string) ([]model.Chat, error) {
 	rows, err := d.QueryContext(ctx, `
-SELECT c.address, c.room, c.scenario, c.phase, c.phase_started_at, c.created_at
+SELECT c.address, c.room, c.scenario, c.language, c.phase, c.phase_started_at, c.created_at
 FROM chats c
 JOIN participants p ON p.chat = c.address
 WHERE p.user = ?
@@ -238,7 +260,7 @@ ORDER BY c.created_at DESC, c.address ASC`, user)
 			createdAt string
 			startedAt string
 		)
-		if err := rows.Scan(&c.Address, &c.Room, &c.Scenario, &c.Phase, &startedAt, &createdAt); err != nil {
+		if err := rows.Scan(&c.Address, &c.Room, &c.Scenario, &c.Language, &c.Phase, &startedAt, &createdAt); err != nil {
 			return nil, err
 		}
 		c.PhaseStartedAt = parseNullTS(sql.NullString{String: startedAt, Valid: startedAt != ""})

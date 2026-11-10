@@ -16,6 +16,11 @@ type ChatResponse struct {
 	Participants []model.Participant `json:"participants"`
 }
 
+// SetChatLanguageRequest selects the language used for generated messages.
+type SetChatLanguageRequest struct {
+	Language string `json:"language"`
+}
+
 // SendMessageRequest is the body for POST /api/message.
 type SendMessageRequest struct {
 	From    string `json:"from"`
@@ -113,6 +118,42 @@ func (s *Server) GetChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, ChatResponse{Chat: chat, Participants: parts})
+}
+
+// SetChatLanguage updates the language used by the chat agent.
+//
+//	@Summary		set chat language
+//	@Description	Sets the language used for generated chat prompts and messages. Supported values are en and ru.
+//	@Tags			chats
+//	@Accept			json
+//	@Produce		json
+//	@Param			address	path	string	true	"Chat address"
+//	@Param			request	body	SetChatLanguageRequest	true	"Chat language"
+//	@Success		200	{object}	model.Chat
+//	@Failure		400	{object}	string
+//	@Failure		404	{object}	string
+//	@Router			/api/chat/{address}/language [patch]
+func (s *Server) SetChatLanguage(w http.ResponseWriter, r *http.Request) {
+	var req SetChatLanguageRequest
+	if err := decodeJSON(r, &req); err != nil {
+		respond(w, http.StatusBadRequest, message(err))
+		return
+	}
+	address := r.PathValue("address")
+	if err := s.db.SetChatLanguage(r.Context(), address, req.Language); err != nil {
+		s.mapError(w, err)
+		return
+	}
+	chat, found, err := s.db.ChatByAddress(r.Context(), address)
+	if err != nil {
+		s.mapError(w, err)
+		return
+	}
+	if !found {
+		s.mapError(w, db.ErrNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, chat)
 }
 
 // ClearChatResponse reports the history clearing result.
