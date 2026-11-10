@@ -78,17 +78,15 @@ func (s *Server) PutUserGreeting(w http.ResponseWriter, r *http.Request) {
 }
 
 // RegenerateUserGreeting re-generates the greeting (hello) message of a
-// user from their bios with the LLM.
+// user from their bios with the LLM, in the room language.
 //
 //	@Summary		regenerate user greeting
-//	@Description	Re-generates the greeting (hello) message of a non-deleted user from their bios. The optional language query parameter selects "en" (default) or "ru".
+//	@Description	Re-generates the greeting (hello) message of a non-deleted user from their bios. The greeting is generated in the room language.
 //	@Tags			users
 //	@Produce		json
 //	@Param			room		path	string	true	"Room address"
 //	@Param			address		path	string	true	"User address"
-//	@Param			language	query	string	false	"Greeting language: en (default) or ru"
 //	@Success		200	{object}	GreetingResponse
-//	@Failure		400	{object}	string
 //	@Failure		404	{object}	string
 //	@Router			/api/room/{room}/user/{address}/greeting/regenerate [post]
 func (s *Server) RegenerateUserGreeting(w http.ResponseWriter, r *http.Request) {
@@ -97,15 +95,7 @@ func (s *Server) RegenerateUserGreeting(w http.ResponseWriter, r *http.Request) 
 		s.mapError(w, err)
 		return
 	}
-	language := r.URL.Query().Get("language")
-	if language == "" {
-		language = "en"
-	}
-	if language != "en" && language != "ru" {
-		respond(w, http.StatusBadRequest, "language must be one of {en, ru}")
-		return
-	}
-	greeting := s.greetingFor(user.Name, user.PublicBio, user.PrivateBio, language)
+	greeting := s.greetingFor(user.Name, user.PublicBio, user.PrivateBio, user.Language)
 	if _, err := s.db.SetUserGreeting(r.Context(), user.Room, user.Address, greeting); err != nil {
 		s.mapError(w, err)
 		return

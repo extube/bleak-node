@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/extube/bleak-node/internal/model"
@@ -54,7 +53,7 @@ func ensureChat(ctx context.Context, q rowQuerier, room, a, b string) (model.Cha
 		return c, false, err
 	}
 
-	c = model.Chat{Room: room, Language: "en", CreatedAt: time.Now().UTC()}
+	c = model.Chat{Room: room, Language: roomLanguageOn(ctx, q, room), CreatedAt: time.Now().UTC()}
 	for attempt := 0; attempt < 3; attempt++ {
 		c.Address = newAddress(16)
 		if _, err := q.ExecContext(ctx,
@@ -127,25 +126,16 @@ func (d *DB) ChatByAddress(ctx context.Context, address string) (model.Chat, boo
 	return c, true, nil
 }
 
-// SetChatLanguage stores the response language for a chat. Empty language
-// values default to English; only supported language codes are accepted.
-func (d *DB) SetChatLanguage(ctx context.Context, address, language string) error {
-	language = strings.ToLower(strings.TrimSpace(language))
-	if language == "" {
-		language = "en"
+// roomLanguageOn reads the room language on the given executor; empty
+// rooms fall back to the default language. Chats inherit this language at
+// creation: a room is single-language end to end.
+func roomLanguageOn(ctx context.Context, q rowQuerier, room string) string {
+	var lang string
+	if err := q.QueryRowContext(ctx,
+		`SELECT language FROM rooms WHERE address = ?`, room).Scan(&lang); err != nil || lang == "" {
+		return model.DefaultLanguage
 	}
-	if language != "en" && language != "ru" {
-		return errors.Join(ErrInvalid, fmt.Errorf("unsupported chat language %q (use en or ru)", language))
-	}
-	res, err := d.ExecContext(ctx,
-		`UPDATE chats SET language = ? WHERE address = ?`, language, address)
-	if err != nil {
-		return err
-	}
-	if n, err := res.RowsAffected(); err == nil && n == 0 {
-		return errors.Join(ErrNotFound, fmt.Errorf("chat %q not found", address))
-	}
-	return nil
+	return lang
 }
 
 // ChatScenario returns the scenario key stored on the chat. The bool

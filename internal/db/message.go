@@ -35,6 +35,13 @@ func (d *DB) CreateMessage(ctx context.Context, m *model.Message) error {
 	m.Chat = chat.Address
 	m.CreatedAt = time.Now().UTC()
 
+	// Single-language rooms: a message must be written in the room (chat)
+	// language.
+	if !model.TextMatchesLanguage(m.Content, chat.Language) {
+		return errors.Join(ErrInvalid, fmt.Errorf(
+			"message must be in the room language %q", chat.Language))
+	}
+
 	// tx_id is generated server-side; retry on the unlikely collision.
 	for attempt := 0; attempt < 3; attempt++ {
 		m.TxID = newTxID()
@@ -75,6 +82,14 @@ func (d *DB) CreateMessages(ctx context.Context, from, to string, contents []str
 	if !found {
 		return nil, errors.Join(ErrNotFound, fmt.Errorf(
 			"chat between %q and %q not found: handshakes in both directions are required", from, to))
+	}
+	// Single-language rooms: every message must be written in the room
+	// (chat) language; a wrong-language batch fails the whole turn.
+	for _, content := range contents {
+		if !model.TextMatchesLanguage(content, chat.Language) {
+			return nil, errors.Join(ErrInvalid, fmt.Errorf(
+				"message must be in the room language %q", chat.Language))
+		}
 	}
 	for _, addr := range []string{from, to} {
 		var ok bool

@@ -1,27 +1,5 @@
 basePath: /
 definitions:
-  model.Chat:
-    properties:
-      address:
-        example: 0xchat123
-        type: string
-      created_at:
-        type: string
-      language:
-        example: en
-        type: string
-      phase:
-        example: networking
-        type: string
-      phase_started_at:
-        type: string
-      room:
-        example: 0xroom123
-        type: string
-      scenario:
-        example: ai-future
-        type: string
-    type: object
   model.Handshake:
     properties:
       created_at:
@@ -86,6 +64,9 @@ definitions:
       description:
         example: A room for bleak meetings
         type: string
+      language:
+        example: en
+        type: string
       max_user:
         example: 100
         type: integer
@@ -106,6 +87,9 @@ definitions:
         type: string
       greeting:
         example: Hi, I'm Alice — I paint watercolor postcards.
+        type: string
+      language:
+        example: en
         type: string
       name:
         example: Alice
@@ -168,14 +152,13 @@ definitions:
     properties:
       description:
         type: string
+      language:
+        type: string
       name:
         type: string
     type: object
   server.CreateUserRequest:
     properties:
-      language:
-        description: 'Language of the generated greeting: "en" (default) or "ru".'
-        type: string
       name:
         type: string
       private_bio:
@@ -211,11 +194,6 @@ definitions:
       from:
         type: string
       to:
-        type: string
-    type: object
-  server.SetChatLanguageRequest:
-    properties:
-      language:
         type: string
     type: object
   server.UpdateRoomRequest:
@@ -290,42 +268,6 @@ paths:
           schema:
             type: string
       summary: kick off chat
-      tags:
-      - chats
-  /api/chat/{address}/language:
-    patch:
-      consumes:
-      - application/json
-      description: Sets the language used for generated chat prompts and messages.
-        Supported values are en and ru.
-      parameters:
-      - description: Chat address
-        in: path
-        name: address
-        required: true
-        type: string
-      - description: Chat language
-        in: body
-        name: request
-        required: true
-        schema:
-          $ref: '#/definitions/server.SetChatLanguageRequest'
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/model.Chat'
-        "400":
-          description: Bad Request
-          schema:
-            type: string
-        "404":
-          description: Not Found
-          schema:
-            type: string
-      summary: set chat language
       tags:
       - chats
   /api/chat/{address}/message:
@@ -896,8 +838,7 @@ paths:
   /api/room/{room}/user/{address}/greeting/regenerate:
     post:
       description: Re-generates the greeting (hello) message of a non-deleted user
-        from their bios. The optional language query parameter selects "en" (default)
-        or "ru".
+        from their bios. The greeting is generated in the room language.
       parameters:
       - description: Room address
         in: path
@@ -909,10 +850,6 @@ paths:
         name: address
         required: true
         type: string
-      - description: 'Greeting language: en (default) or ru'
-        in: query
-        name: language
-        type: string
       produces:
       - application/json
       responses:
@@ -920,10 +857,6 @@ paths:
           description: OK
           schema:
             $ref: '#/definitions/server.GreetingResponse'
-        "400":
-          description: Bad Request
-          schema:
-            type: string
         "404":
           description: Not Found
           schema:

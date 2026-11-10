@@ -79,17 +79,21 @@ func New(database *db.DB, cfg Config, logger *slog.Logger) *Worker {
 	}
 }
 
-// completeWithRetry tolerates a flaky gateway: empty answers come in
-// short bursts, so a couple of brief retries inside ONE event attempt
-// stop a whole chat turn from burning its queue-level attempts (three
-// empty responses otherwise kill the event and hang the chat forever).
-func (w *Worker) completeWithRetry(ctx context.Context, prompt []llmMessage) (string, error) {
+// completeWithRetry tolerates a flaky gateway: empty answers and answers
+// in the wrong room language come in short bursts, so a couple of brief
+// retries inside ONE event attempt stop a whole chat turn from burning its
+// queue-level attempts (three bad responses otherwise kill the event and
+// hang the chat forever).
+func (w *Worker) completeWithRetry(ctx context.Context, prompt []llmMessage, wantLanguage string) (string, error) {
 	const tries = 3
 	var lastErr error
 	for i := 0; i < tries; i++ {
 		out, err := w.llm.Complete(ctx, prompt)
 		if err == nil && strings.TrimSpace(out) != "" {
-			return out, nil
+			if model.TextMatchesLanguage(out, wantLanguage) {
+				return out, nil
+			}
+			err = errors.New("llm answered in the wrong language")
 		}
 		if err != nil {
 			lastErr = err
@@ -285,7 +289,7 @@ func (w *Worker) process(ctx context.Context, ev model.Event) error {
 	if overLimit && transition {
 		// The networking part closes with ONE message: an AFTER-step follow-up
 		// personal chat plus an offer to switch to the abstract theme.
-		out, err := w.completeWithRetry(ctx, buildTransitionPrompt(theme, speaker, listener, msgs, chat.Language))
+		out, err := w.completeWithRetry(ctx, buildTransitionPrompt(theme, speaker, listener, msgs, chat.Language), chat.Language)
 		if err != nil {
 			return err
 		}
@@ -299,7 +303,7 @@ func (w *Worker) process(ctx context.Context, ev model.Event) error {
 		// question, its text rides along so the farewell can answer it in
 		// the first sentence.
 		last, _ := lastListenerMessage(listener, msgs)
-		out, err := w.completeWithRetry(ctx, buildGoodbyePrompt(theme, speaker, last, chat.Language))
+		out, err := w.completeWithRetry(ctx, buildGoodbyePrompt(theme, speaker, last, chat.Language), chat.Language)
 		if err != nil {
 			return err
 		}
@@ -336,7 +340,7 @@ func (w *Worker) process(ctx context.Context, ev model.Event) error {
 				}
 			}
 			prompt := buildPrompt(theme, phase, speaker, listener, msgs, speakerTurns, overLimit, nudge, chat.Language)
-			out, err := w.completeWithRetry(ctx, prompt)
+			out, err := w.completeWithRetry(ctx, prompt, chat.Language)
 			if err != nil {
 				return err
 			}

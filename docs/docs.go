@@ -88,59 +88,6 @@ const docTemplate = `{
                 }
             }
         },
-        "/api/chat/{address}/language": {
-            "patch": {
-                "description": "Sets the language used for generated chat prompts and messages. Supported values are en and ru.",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "chats"
-                ],
-                "summary": "set chat language",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Chat address",
-                        "name": "address",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "description": "Chat language",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/server.SetChatLanguageRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/model.Chat"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "type": "string"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "type": "string"
-                        }
-                    }
-                }
-            }
-        },
         "/api/chat/{address}/message": {
             "get": {
                 "description": "Returns every message in the chat, oldest first.",
@@ -968,7 +915,7 @@ const docTemplate = `{
         },
         "/api/room/{room}/user/{address}/greeting/regenerate": {
             "post": {
-                "description": "Re-generates the greeting (hello) message of a non-deleted user from their bios. The optional language query parameter selects \"en\" (default) or \"ru\".",
+                "description": "Re-generates the greeting (hello) message of a non-deleted user from their bios. The greeting is generated in the room language.",
                 "produces": [
                     "application/json"
                 ],
@@ -990,12 +937,6 @@ const docTemplate = `{
                         "name": "address",
                         "in": "path",
                         "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "Greeting language: en (default) or ru",
-                        "name": "language",
-                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -1003,12 +944,6 @@ const docTemplate = `{
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/server.GreetingResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "type": "string"
                         }
                     },
                     "404": {
@@ -1054,37 +989,6 @@ const docTemplate = `{
         }
     },
     "definitions": {
-        "model.Chat": {
-            "type": "object",
-            "properties": {
-                "address": {
-                    "type": "string",
-                    "example": "0xchat123"
-                },
-                "created_at": {
-                    "type": "string"
-                },
-                "language": {
-                    "type": "string",
-                    "example": "en"
-                },
-                "phase": {
-                    "type": "string",
-                    "example": "networking"
-                },
-                "phase_started_at": {
-                    "type": "string"
-                },
-                "room": {
-                    "type": "string",
-                    "example": "0xroom123"
-                },
-                "scenario": {
-                    "type": "string",
-                    "example": "ai-future"
-                }
-            }
-        },
         "model.Handshake": {
             "type": "object",
             "properties": {
@@ -1175,6 +1079,10 @@ const docTemplate = `{
                     "type": "string",
                     "example": "A room for bleak meetings"
                 },
+                "language": {
+                    "type": "string",
+                    "example": "en"
+                },
                 "max_user": {
                     "type": "integer",
                     "example": 100
@@ -1204,6 +1112,10 @@ const docTemplate = `{
                 "greeting": {
                     "type": "string",
                     "example": "Hi, I'm Alice — I paint watercolor postcards."
+                },
+                "language": {
+                    "type": "string",
+                    "example": "en"
                 },
                 "name": {
                     "type": "string",
@@ -1294,6 +1206,9 @@ const docTemplate = `{
                 "description": {
                     "type": "string"
                 },
+                "language": {
+                    "type": "string"
+                },
                 "name": {
                     "type": "string"
                 }
@@ -1302,10 +1217,6 @@ const docTemplate = `{
         "server.CreateUserRequest": {
             "type": "object",
             "properties": {
-                "language": {
-                    "description": "Language of the generated greeting: \"en\" (default) or \"ru\".",
-                    "type": "string"
-                },
                 "name": {
                     "type": "string"
                 },
@@ -1360,14 +1271,6 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "to": {
-                    "type": "string"
-                }
-            }
-        },
-        "server.SetChatLanguageRequest": {
-            "type": "object",
-            "properties": {
-                "language": {
                     "type": "string"
                 }
             }

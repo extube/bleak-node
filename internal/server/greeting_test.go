@@ -51,9 +51,9 @@ func TestGreetingGeneratedOnCreation(t *testing.T) {
 	json.NewDecoder(resp.Body).Decode(&room)
 	resp.Body.Close()
 
-	// User: the greeting is generated during creation.
+	// User: the greeting is generated during creation, in the room language.
 	resp, err = http.Post(ts.URL+"/api/room/"+room.Address+"/user", "application/json",
-		strings.NewReader(`{"name":"Sofia","public_bio":"calligrapher","language":"en"}`))
+		strings.NewReader(`{"name":"Sofia","public_bio":"calligrapher"}`))
 	if err != nil || resp.StatusCode != http.StatusCreated {
 		t.Fatalf("create user: %v %s", err, resp.Status)
 	}
@@ -102,15 +102,15 @@ func TestGreetingGeneratedOnCreation(t *testing.T) {
 		t.Fatalf("put question greeting: %v %s", err, resp.Status)
 	}
 
-	// Regenerate goes through the greeter again, honoring ?language=ru.
+	// Regenerate goes through the greeter again, still in the room language.
 	req, _ = http.NewRequest(http.MethodPost,
-		ts.URL+"/api/room/"+room.Address+"/user/"+user.Address+"/greeting/regenerate?language=ru", nil)
+		ts.URL+"/api/room/"+room.Address+"/user/"+user.Address+"/greeting/regenerate", nil)
 	resp, err = http.DefaultClient.Do(req)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		t.Fatalf("regenerate: %v %s", err, resp.Status)
 	}
 	resp.Body.Close()
-	if greeter.calls != 2 || greeter.language != "ru" {
+	if greeter.calls != 2 || greeter.language != "en" {
 		t.Fatalf("after regenerate: calls = %d language = %q", greeter.calls, greeter.language)
 	}
 }

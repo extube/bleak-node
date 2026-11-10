@@ -21,14 +21,18 @@ func (d *DB) CreateUser(ctx context.Context, roomAddress string, user *model.Use
 	defer func() { _ = tx.Rollback() }()
 
 	var roomMax int
+	var roomLanguage string
 	err = tx.QueryRowContext(ctx,
-		`SELECT max_user FROM rooms WHERE address = ? AND deleted_at IS NULL`, roomAddress).Scan(&roomMax)
+		`SELECT max_user, language FROM rooms WHERE address = ? AND deleted_at IS NULL`, roomAddress).Scan(&roomMax, &roomLanguage)
 	if errors.Is(err, sql.ErrNoRows) {
 		return errors.Join(ErrNotFound, fmt.Errorf("room %q not found", roomAddress))
 	}
 	if err != nil {
 		return err
 	}
+	// The user inherits the room language: greetings and dialogs of the
+	// room are always in the room's single language.
+	user.Language = roomLanguage
 
 	// Enforce room capacity.
 	var cnt int
@@ -51,9 +55,9 @@ func (d *DB) CreateUser(ctx context.Context, roomAddress string, user *model.Use
 	for attempt := 0; attempt < 3; attempt++ {
 		user.Address = newAddress(16)
 		_, err = tx.ExecContext(ctx,
-			`INSERT INTO users (address, name, room, public_bio, private_bio, greeting, created_at, updated_at, deleted_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
-			user.Address, user.Name, roomAddress, user.PublicBio, user.PrivateBio, user.Greeting,
+			`INSERT INTO users (address, name, room, public_bio, private_bio, greeting, language, created_at, updated_at, deleted_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+			user.Address, user.Name, roomAddress, user.PublicBio, user.PrivateBio, user.Greeting, user.Language,
 			user.CreatedAt.Format(time.RFC3339), user.UpdatedAt.Format(time.RFC3339),
 		)
 		if isUnique(err) {
@@ -79,7 +83,7 @@ func (d *DB) CreateUser(ctx context.Context, roomAddress string, user *model.Use
 // ListRoomUsers returns all non-deleted users of a room.
 func (d *DB) ListRoomUsers(ctx context.Context, roomAddress string) ([]model.User, error) {
 	rows, err := d.QueryContext(ctx,
-		`SELECT address, name, room, public_bio, private_bio, greeting, created_at, updated_at, deleted_at
+		`SELECT address, name, room, public_bio, private_bio, greeting, language, created_at, updated_at, deleted_at
 		 FROM users WHERE room = ? AND deleted_at IS NULL ORDER BY address`, roomAddress)
 	if err != nil {
 		return nil, err
@@ -100,7 +104,7 @@ func (d *DB) ListRoomUsers(ctx context.Context, roomAddress string) ([]model.Use
 // GetUser returns a single non-deleted user inside the given room.
 func (d *DB) GetUser(ctx context.Context, roomAddress, address string) (model.User, error) {
 	row := d.QueryRowContext(ctx,
-		`SELECT address, name, room, public_bio, private_bio, greeting, created_at, updated_at, deleted_at
+		`SELECT address, name, room, public_bio, private_bio, greeting, language, created_at, updated_at, deleted_at
 		 FROM users WHERE address = ? AND room = ? AND deleted_at IS NULL`, address, roomAddress)
 	user, err := scanUser(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -118,7 +122,7 @@ func (d *DB) UserExists(ctx context.Context, address string) (bool, error) {
 // soft-deleted rows: the agent worker needs the bios even then).
 func (d *DB) UserByAddress(ctx context.Context, address string) (model.User, bool, error) {
 	row := d.QueryRowContext(ctx,
-		`SELECT address, name, room, public_bio, private_bio, greeting, created_at, updated_at, deleted_at
+		`SELECT address, name, room, public_bio, private_bio, greeting, language, created_at, updated_at, deleted_at
 		 FROM users WHERE address = ?`, address)
 	user, err := scanUser(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -203,7 +207,7 @@ func scanUser(s scanner) (model.User, error) {
 		updatedAt string
 		deletedAt sql.NullString
 	)
-	if err := s.Scan(&u.Address, &u.Name, &u.Room, &u.PublicBio, &u.PrivateBio, &u.Greeting, &createdAt, &updatedAt, &deletedAt); err != nil {
+	if err := s.Scan(&u.Address, &u.Name, &u.Room, &u.PublicBio, &u.PrivateBio, &u.Greeting, &u.Language, &createdAt, &updatedAt, &deletedAt); err != nil {
 		return model.User{}, err
 	}
 	u.CreatedAt = parseTS(createdAt)
