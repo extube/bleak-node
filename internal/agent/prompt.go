@@ -444,23 +444,29 @@ func questionDirect(listener model.User, lastMsg, language string) string {
 
 // goodbyeReplies are pattern acknowledgements a listener may answer a
 // farewell with: short, polite, generic — no conversation content. The
-// worker picks one of them locally without calling the LLM.
+// worker picks one of them locally without calling the LLM. Some carry an
+// emoji for warmth; plain ones stay in the list too, so a goodbye without
+// emoji happens as well.
 var goodbyeReplies = []string{
-	"Ha, sure thing! It was really nice talking with you too - take care!",
-	"Thanks, you too! Have a good one and see you around.",
-	"Likewise! Was a pleasure chatting. Good luck out there!",
+	"Ha, sure thing! It was really nice talking with you too - take care! 👋",
+	"Thanks, you too! Have a good one and see you around 🙂",
+	"Likewise! Was a pleasure chatting. Good luck out there! ☀️",
 	"Take care too! Let's chat again some other day.",
-	"Sounds good, thanks! Have a great day and stay well.",
+	"Sounds good, thanks! Have a great day and stay well 🌿",
 	"Thanks a lot, same here! Keep in touch and be safe.",
+	"You too! It was a real pleasure — talk soon 👋",
+	"Thanks, same to you! See you around.",
 }
 
 var goodbyeRepliesRU = []string{
-	"Да, конечно! Было приятно поболтать. Давай, береги себя!",
-	"Спасибо, и тебе хорошего дня! Ещё спишемся.",
-	"Мне тоже было приятно пообщаться. Удачи тебе!",
+	"Да, конечно! Было приятно поболтать. Давай, береги себя! 👋",
+	"Спасибо, и тебе хорошего дня! Ещё спишемся 🙂",
+	"Мне тоже было приятно пообщаться. Удачи тебе! ☀️",
 	"Давай, до связи! Может, ещё как-нибудь поболтаем.",
-	"Спасибо! Хорошего дня и береги себя.",
+	"Спасибо! Хорошего дня и береги себя 🌿",
 	"И тебе спасибо за разговор. Пока!",
+	"И тебе! Было приятно, давай до связи 👋",
+	"Спасибо, и тебе! Удачи и до встречи.",
 }
 
 // goodbyeReply returns one greeting-like reply to a farewell.

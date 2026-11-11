@@ -73,8 +73,11 @@ func TestFallbackGreeting(t *testing.T) {
 	if strings.ContainsRune(en, '?') || !strings.Contains(en, "Mark") {
 		t.Fatalf("en fallback = %q", en)
 	}
+	if !strings.Contains(en, "👋") {
+		t.Fatalf("en fallback = %q, want the wave emoji", en)
+	}
 	ru := FallbackGreeting("Марк", "", true)
-	if ru != "Привет, я Марк." {
+	if ru != "Привет, я Марк. 👋" {
 		t.Fatalf("ru fallback = %q", ru)
 	}
 }
@@ -132,5 +135,23 @@ func TestFitSentences(t *testing.T) {
 	// Short greetings pass through untouched.
 	if got := fitSentences("Привет! Я Кирилл."); got != "Привет! Я Кирилл." {
 		t.Fatalf("short fit = %q", got)
+	}
+}
+
+func TestFitSentencesKeepsTrailingEmoji(t *testing.T) {
+	// A decorative tail (emoji, punctuation) after the last sentence ender
+	// is part of the greeting, not a truncation.
+	withEmoji := "Привет! Я Аня — рисую детские книжки акварелью. Очень рада познакомиться! 💛"
+	if got := fitSentences(withEmoji); got != withEmoji {
+		t.Fatalf("emoji tail dropped: %q", got)
+	}
+	smiley := "Hey, I'm Mark — I repair clocks :)"
+	if got := fitSentences(smiley); got != smiley {
+		t.Fatalf("smiley tail dropped: %q", got)
+	}
+	// Letters after the last ender are still a truncated tail.
+	cut := "Привет! Я Кирилл. Держу пекарню — заходи, у нас пахнет ванилью и"
+	if got := fitSentences(cut); got != "Привет! Я Кирилл." {
+		t.Fatalf("truncated tail kept: %q", got)
 	}
 }

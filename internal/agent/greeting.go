@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/extube/bleak-node/internal/model"
 )
@@ -63,7 +64,9 @@ func (g *Greeter) GenerateGreeting(name, publicBio, privateBio, language string)
 // fitSentences keeps the longest run of complete sentences that fits the
 // message limit: a greeting cut mid-word ("... пахнет ванилью и") reads
 // broken in the chat. The sentence carrying a question mark is dropped
-// entirely - greetings are statements only.
+// entirely - greetings are statements only. A tail after the last sentence
+// ender that carries no letters (emoji, punctuation) is decoration and
+// stays: "... до связи 👋" is a complete, living greeting.
 func fitSentences(s string) string {
 	if q := strings.IndexRune(s, '?'); q >= 0 {
 		head := ""
@@ -79,25 +82,24 @@ func fitSentences(s string) string {
 		}
 	}
 	runes := []rune(s)
-	acc := make([]rune, 0, len(runes))
-	lastGood := ""
-	for _, r := range runes {
-		acc = append(acc, r)
+	lastEnder := -1
+	for i, r := range runes {
 		if r == '.' || r == '!' || r == '…' {
-			if len(acc) <= model.MaxMessageContentLen {
-				lastGood = strings.TrimSpace(string(acc))
-			}
-			if len(acc) >= model.MaxMessageContentLen {
-				break
-			}
+			lastEnder = i
 		}
 	}
-	if lastGood != "" {
-		return lastGood
+	if lastEnder < 0 {
+		// No sentence ender at all: the text was cut mid-sentence.
+		return trimAndLimit(runes, model.MaxMessageContentLen)
 	}
-	// No complete sentence fits (or none found): best effort is the
-	// word-boundary trim.
-	return trimAndLimit(runes, model.MaxMessageContentLen)
+	// Letters after the last sentence ender mean a truncated tail; emoji
+	// and punctuation after it are just decoration.
+	for _, r := range runes[lastEnder+1:] {
+		if unicode.IsLetter(r) {
+			return strings.TrimSpace(string(runes[:lastEnder+1]))
+		}
+	}
+	return strings.TrimSpace(s)
 }
 
 // greetingPrompt builds the one-message generation prompt for a greeting:
@@ -108,12 +110,12 @@ func greetingPrompt(name, publicBio, privateBio string, russian bool) []llmMessa
 		return []llmMessage{{Role: "user", Content: fmt.Sprintf(`Напиши фиксированное приветственное сообщение, которое участник чата %s отправляет самым первым, когда открывает разговор с незнакомцем.
 Открытая биография (что о нём знают): %s
 Личная биография (только для тона, не раскрывай): %s
-Пиши от первого лица от имени %s: одно-два коротких разговорных предложения — имя и чем занимается. До 200 символов. В приветствии НЕ должно быть вопроса и знака вопроса — только утверждения. Тепло и по-человечески, как настоящее приветствие в мессенджере. Выведи только текст приветствия: без кавычек, подписей вроде «Пользователь:», markdown и адресов.`, name, pub, priv, name)}}
+Пиши от первого лица от имени %s: одно-два коротких разговорных предложения — имя и чем занимается. До 200 символов. В приветствии НЕ должно быть вопроса и знака вопроса — только утверждения. Тепло и по-человечески, как настоящее приветствие в мессенджере. Один эмодзи к месту (например 👋 или 😊) оживит приветствие, но можно и совсем без эмодзи. Выведи только текст приветствия: без кавычек, подписей вроде «Пользователь:», markdown и адресов.`, name, pub, priv, name)}}
 	}
 	return []llmMessage{{Role: "user", Content: fmt.Sprintf(`Write the fixed greeting message that the chat user %s sends first when opening a conversation with a stranger.
 Public bio (what everyone knows about them): %s
 Private bio (tone only, do not disclose): %s
-Write in first person as %s: one or two short casual sentences introducing the name and what they do, under 200 characters. The greeting must NOT contain a question or a question mark - statements only. Warm and human, like a real messenger hello. Output the greeting text only: no quotes, no labels like "User:", no markdown, no addresses.`, name, pub, priv, name)}}
+Write in first person as %s: one or two short casual sentences introducing the name and what they do, under 200 characters. The greeting must NOT contain a question or a question mark - statements only. Warm and human, like a real messenger hello. One fitting emoji (like 👋 or 😊) makes it feel alive, but a greeting without any emoji is fine too. Output the greeting text only: no quotes, no labels like "User:", no markdown, no addresses.`, name, pub, priv, name)}}
 }
 
 // withoutQuestions drops the sentence that carries the first question mark
@@ -141,14 +143,14 @@ func FallbackGreeting(name, publicBio string, russian bool) string {
 	bio = strings.TrimSpace(bio)
 	if russian {
 		if bio == "" {
-			return "Привет, я " + name + "."
+			return "Привет, я " + name + ". 👋"
 		}
-		return "Привет, я " + name + " — " + bio + "."
+		return "Привет, я " + name + " — " + bio + ". 👋"
 	}
 	if bio == "" {
-		return "Hi, I'm " + name + "."
+		return "Hi, I'm " + name + ". 👋"
 	}
-	return "Hi, I'm " + name + " — " + bio + "."
+	return "Hi, I'm " + name + " — " + bio + ". 👋"
 }
 
 // firstSentence returns the opening sentence of the bio (cut at the first
