@@ -35,10 +35,37 @@ func (d *DB) CreateMessage(ctx context.Context, m *model.Message) error {
 	m.Chat = chat.Address
 	m.CreatedAt = time.Now().UTC()
 
+	// Single-language rooms: a message must be written in the room (chat)
+	// language.
+	if !model.TextMatchesLanguage(m.Content, chat.Language) {
+		return errors.Join(ErrInvalid, fmt.Errorf(
+			"message must be in the room language %q", chat.Language))
+	}
+
 	// tx_id is generated server-side; retry on the unlikely collision.
 	for attempt := 0; attempt < 3; attempt++ {
 		m.TxID = newTxID()
 		_, err := d.ExecContext(ctx,
+			`INSERT INTO messages (tx_id, "from", "to", created_at, content, chat) VALUES (?, ?, ?, ?, ?, ?)`,
+			m.TxID, m.From, m.To, m.CreatedAt.Format(time.RFC3339), m.Content, m.Chat)
+		if isUnique(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		return nil
+	}
+	return errors.Join(ErrConflict, errors.New("could not generate unique message tx_id"))
+}
+
+// insertMessageOn inserts one message row on the given executor (tx or db),
+// generating and retrying the server-side tx_id on the unlikely collision.
+// The caller validated the chat and the language beforehand.
+func insertMessageOn(ctx context.Context, q execContext, m *model.Message) error {
+	for attempt := 0; attempt < 3; attempt++ {
+		m.TxID = newTxID()
+		_, err := q.ExecContext(ctx,
 			`INSERT INTO messages (tx_id, "from", "to", created_at, content, chat) VALUES (?, ?, ?, ?, ?, ?)`,
 			m.TxID, m.From, m.To, m.CreatedAt.Format(time.RFC3339), m.Content, m.Chat)
 		if isUnique(err) {
@@ -76,6 +103,14 @@ func (d *DB) CreateMessages(ctx context.Context, from, to string, contents []str
 		return nil, errors.Join(ErrNotFound, fmt.Errorf(
 			"chat between %q and %q not found: handshakes in both directions are required", from, to))
 	}
+	// Single-language rooms: every message must be written in the room
+	// (chat) language; a wrong-language batch fails the whole turn.
+	for _, content := range contents {
+		if !model.TextMatchesLanguage(content, chat.Language) {
+			return nil, errors.Join(ErrInvalid, fmt.Errorf(
+				"message must be in the room language %q", chat.Language))
+		}
+	}
 	for _, addr := range []string{from, to} {
 		var ok bool
 		if err := tx.QueryRowContext(ctx,
@@ -96,21 +131,8 @@ func (d *DB) CreateMessages(ctx context.Context, from, to string, contents []str
 			Chat:      chat.Address,
 			CreatedAt: time.Now().UTC(),
 		}
-		for attempt := 0; attempt < 3; attempt++ {
-			m.TxID = newTxID()
-			_, err := tx.ExecContext(ctx,
-				`INSERT INTO messages (tx_id, "from", "to", created_at, content, chat) VALUES (?, ?, ?, ?, ?, ?)`,
-				m.TxID, m.From, m.To, m.CreatedAt.Format(time.RFC3339), m.Content, m.Chat)
-			if isUnique(err) {
-				continue
-			}
-			if err != nil {
-				return nil, err
-			}
-			break
-		}
-		if m.TxID == "" {
-			return nil, errors.Join(ErrConflict, errors.New("could not generate unique message tx_id"))
+		if err := insertMessageOn(ctx, tx, &m); err != nil {
+			return nil, err
 		}
 		out = append(out, m)
 	}

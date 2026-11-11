@@ -127,6 +127,8 @@ CREATE TABLE IF NOT EXISTS messages (
 CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat);
 
 -- Lightweight queue over SQLite. The agent worker consumes pending rows.
+-- not_before holds an RFC3339 moment an event may not start before (retry
+-- backoff); empty means immediately eligible.
 CREATE TABLE IF NOT EXISTS events (
 	id           INTEGER PRIMARY KEY AUTOINCREMENT,
 	type         TEXT NOT NULL,
@@ -137,7 +139,8 @@ CREATE TABLE IF NOT EXISTS events (
 	attempts     INTEGER NOT NULL DEFAULT 0,
 	error        TEXT NOT NULL DEFAULT '',
 	created_at   TEXT NOT NULL,
-	processed_at TEXT
+	processed_at TEXT,
+	not_before   TEXT NOT NULL DEFAULT ''
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_status ON events(status, id);
@@ -168,6 +171,20 @@ CREATE INDEX IF NOT EXISTS idx_events_status ON events(status, id);
 		return err
 	}
 	if err := d.ensureColumn(ctx, "chats", "language", "TEXT NOT NULL DEFAULT 'en'"); err != nil {
+		return err
+	}
+	if err := d.ensureColumn(ctx, "users", "greeting", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := d.ensureColumn(ctx, "users", "language", "TEXT NOT NULL DEFAULT 'en'"); err != nil {
+		return err
+	}
+	if err := d.ensureColumn(ctx, "rooms", "language", "TEXT NOT NULL DEFAULT 'en'"); err != nil {
+		return err
+	}
+	// Retry backoff: an event may not start before this moment (empty means
+	// immediately eligible). Older rows default to empty.
+	if err := d.ensureColumn(ctx, "events", "not_before", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
 	// Two-part conversations: the mandatory networking phase precedes the

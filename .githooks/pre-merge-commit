@@ -1,6 +1,11 @@
 #!/bin/sh
 # Blocks:
 #   - any local merge INTO main (release-only: merges land via GitHub PR)
+#   - any merge carrying a foreign identity (see .githooks/identity.sh)
+
+# Identity guard: sourced = enforced; declines any other identity.
+. "$(git rev-parse --show-toplevel)/.githooks/identity.sh"
+
 branch=$(git symbolic-ref --quiet --short HEAD || true)
 
 if [ "$branch" = "main" ]; then

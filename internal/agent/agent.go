@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/extube/bleak-node/internal/db"
@@ -35,7 +36,13 @@ type Config struct {
 	Poll time.Duration
 	// Timeout bounds one queued event end-to-end (queue reads + LLM call).
 	Timeout time.Duration
-	// MaxAttempts before an event is marked failed.
+	// LLMCallTimeout bounds ONE LLM call inside an event; the retries of
+	// completeWithRetry only happen when a single call cannot eat the whole
+	// event timeout. Must stay smaller than Timeout.
+	LLMCallTimeout time.Duration
+	// MaxAttempts before an event is marked failed. Attempts requeue with
+	// exponential backoff (see backoffDelay), so a gateway outage rides out
+	// in the queue instead of burning all attempts in minutes.
 	MaxAttempts int
 	// EchoRetries is how many times a reply that verbatim-repeats one of the
 	// agent's earlier lines is regenerated before it is saved anyway.
@@ -58,11 +65,18 @@ func New(database *db.DB, cfg Config, logger *slog.Logger) *Worker {
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = 90 * time.Second
 	}
+	if cfg.LLMCallTimeout <= 0 {
+		// Three calls plus the 2s+4s retry waits must fit into the default
+		// 90s event timeout with headroom.
+		cfg.LLMCallTimeout = 25 * time.Second
+	}
 	if cfg.EchoRetries <= 0 {
 		cfg.EchoRetries = 2
 	}
 	if cfg.MaxAttempts <= 0 {
-		cfg.MaxAttempts = 3
+		// With exponential backoff the six attempts spread over ~1h of
+		// gateway trouble before an event is given up on.
+		cfg.MaxAttempts = 6
 	}
 	if cfg.MaxUserMessages <= 0 {
 		cfg.MaxUserMessages = model.DefaultUserMessageLimit
@@ -78,6 +92,53 @@ func New(database *db.DB, cfg Config, logger *slog.Logger) *Worker {
 	}
 }
 
+// completeWithRetry tolerates a flaky gateway: empty answers and answers
+// in the wrong room language come in short bursts, so a couple of brief
+// retries inside ONE event attempt stop a whole chat turn from burning its
+// queue-level attempts (three bad responses otherwise kill the event and
+// hang the chat forever).
+func (w *Worker) completeWithRetry(ctx context.Context, prompt []llmMessage, wantLanguage string) (string, error) {
+	const tries = 3
+	var lastErr error
+	for i := 0; i < tries; i++ {
+		// Per-call budget: without it one slow gateway call eats the whole
+		// event timeout and the two retries never get their chance.
+		callCtx, callCancel := context.WithTimeout(ctx, w.cfg.LLMCallTimeout)
+		out, err := w.llm.Complete(callCtx, prompt)
+		callCancel()
+		if err == nil && strings.TrimSpace(out) != "" {
+			if model.TextMatchesLanguage(out, wantLanguage) {
+				return out, nil
+			}
+			err = errors.New("llm answered in the wrong language")
+		}
+		if err != nil {
+			lastErr = err
+		} else {
+			lastErr = errors.New("llm returned an empty message")
+		}
+		if ctx.Err() != nil {
+			return "", lastErr
+		}
+		select {
+		case <-ctx.Done():
+			return "", lastErr
+		case <-time.After(time.Duration(i+1) * 2 * time.Second): // 2s, 4s
+		}
+	}
+	return "", lastErr
+}
+
+// Dialog-recovery tuning: the revival sweep runs about twice a minute and
+// only touches chats whose silence no live queue activity explains.
+const (
+	revivalSweepEvery = 30 * time.Second
+	// revivalMsgSilence: the last message must be older than this - one
+	// live turn takes seconds to ~90s, so a longer silence with NO pending
+	// or processing event means the chain is broken.
+	revivalMsgSilence = 3 * time.Minute
+)
+
 // Run processes the queue until ctx is cancelled. Processing events of a
 // previous run are reclaimed first: this worker is the single queue consumer,
 // so any "processing" left by a crashed or restarted process is an orphan.
@@ -89,12 +150,17 @@ func (w *Worker) Run(ctx context.Context) {
 	}
 	ticker := time.NewTicker(w.cfg.Poll)
 	defer ticker.Stop()
+	nextSweep := time.Now().Add(revivalSweepEvery)
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			w.tick(ctx)
+			if time.Now().After(nextSweep) {
+				nextSweep = time.Now().Add(revivalSweepEvery)
+				w.revive(ctx)
+			}
 		}
 	}
 }
@@ -127,12 +193,18 @@ func (w *Worker) RunOnce(ctx context.Context) (bool, error) {
 		if ev.Attempts+1 >= w.cfg.MaxAttempts {
 			return true, w.db.CompleteEvent(endCtx, ev.ID, err.Error())
 		}
-		if rerr := w.db.RequeueEvent(endCtx, ev.ID); rerr != nil {
+		// Exponential backoff: the next attempt waits 1, 2, 4, ... minutes,
+		// so a flaky-gateway burst (empty answers, timeouts) waits out in
+		// the queue instead of burning all attempts in five minutes and
+		// hanging the chat forever.
+		if rerr := w.db.RequeueEvent(endCtx, ev.ID, backoffDelay(ev.Attempts+1)); rerr != nil {
 			return true, rerr
 		}
 		return true, nil
 	}
-	return true, w.db.CompleteEvent(eventCtx, ev.ID, "")
+	// Success: the turn (message bubbles, phase stamp, next event) committed
+	// atomically together with the event completion inside process().
+	return true, nil
 }
 
 func (w *Worker) tick(ctx context.Context) {
@@ -148,19 +220,115 @@ func (w *Worker) tick(ctx context.Context) {
 	}
 }
 
+// turnGroup is one message group of a turn: bubbles from one author with a
+// log label (e.g. "greeting 1/2", "goodbye reply").
+type turnGroup struct {
+	label  string
+	bubble db.TurnBubble
+}
+
+// turnResult collects everything ONE processed event changes. It all
+// commits in ONE transaction (db.CompleteTurn): message bubbles, an
+// optional phase stamp, an optional next-turn event and the completion of
+// the event itself.
+type turnResult struct {
+	groups []turnGroup
+	phase  *db.TurnPhase
+	next   *db.TurnNext
+}
+
+// commitTurn applies the turn atomically and logs the saved bubbles group
+// by group. Either everything commits or nothing does: a crash or reload
+// mid-turn leaves the event reclaimable and the transcript untouched, so
+// the retry regenerates the turn cleanly - no duplicated bubbles, no lost
+// hand-off, no stalled dialog.
+func (w *Worker) commitTurn(ctx context.Context, ev model.Event, names map[string]string, r turnResult) error {
+	bubbles := make([]db.TurnBubble, len(r.groups))
+	for i, g := range r.groups {
+		bubbles[i] = g.bubble
+	}
+	saved, err := w.db.CompleteTurn(ctx, ev.ID, bubbles, r.phase, r.next)
+	if err != nil {
+		return err
+	}
+	i := 0
+	for _, g := range r.groups {
+		for range g.bubble.Contents {
+			m := saved[i]
+			i++
+			from, to := m.From, m.To
+			if n, ok := names[m.From]; ok {
+				from = n
+			}
+			if n, ok := names[m.To]; ok {
+				to = n
+			}
+			w.log.Info("agent message",
+				"chat", ev.Chat, "from", from, "to", to,
+				"part", g.label, "content", m.Content)
+		}
+	}
+	return nil
+}
+
+// backoffDelay grows exponentially with the attempt number - 1, 2, 4, 8, 16,
+// 32 minutes, capped at an hour - so a longer gateway outage waits out in
+// the queue instead of exhausting the attempts in minutes and hanging the
+// chat forever.
+func backoffDelay(attempt int) time.Duration {
+	d := time.Minute
+	for i := 1; i < attempt; i++ {
+		d *= 2
+		if d >= time.Hour {
+			return time.Hour
+		}
+	}
+	return d
+}
+
+// revive re-kickoffs chats the revival sweep considers stalled: they carry
+// messages, have no pending or processing event, their last message is not
+// a farewell (the conversation did not end) and their silence is not
+// explained by any recent queue activity. The participant who did not write
+// the last message speaks next - the same hand-off the live chain performs
+// after every turn. This is the last line of defense: whatever broke the
+// chain (a crash between two writes of an older build, a lost enqueue, a
+// manually failed event), the dialog resumes on its own.
+func (w *Worker) revive(ctx context.Context) {
+	markers := append(append([]string{}, goodbyeReplies...), goodbyeRepliesRU...)
+	stalled, err := w.db.StalledChats(ctx, revivalMsgSilence, markers)
+	if err != nil {
+		w.log.Error("revival sweep", "err", err)
+		return
+	}
+	for _, s := range stalled {
+		if err := w.db.EnqueueEvent(ctx, model.EventChatInteract, s.Chat, s.Other, s.LastFrom); err != nil {
+			w.log.Error("chat revival", "chat", s.Chat, "err", err)
+			continue
+		}
+		w.log.Warn("stalled chat revived",
+			"chat", s.Chat, "speaker", s.Other, "listener", s.LastFrom,
+			"last_message_at", s.LastAt.Format(time.RFC3339))
+	}
+}
+
 // process generates the next turn of the event speaker inside the chat and,
 // unless the speaker has spent its message quota, queues the turn of the
 // listener (the other agent) after saving the response. Every turn generates
 // exactly ONE next-turn event: a reply is saved as one natural message bubble.
 // Structure of a chat:
-//   - the first message of EVERY participant is a self-introduction;
-//   - the middle part is the themed conversation;
+//   - the chat opens with the two participants' stored greeting messages
+//     (plain hello bubbles, no questions, no LLM turn);
+//   - the chat opener then continues with the first question turn;
+//   - the middle part is the conversation;
 //   - the end is a warm farewell followed by a short localized reply, without LLM.
 func (w *Worker) process(ctx context.Context, ev model.Event) error {
 	if ev.Type != model.EventChatInteract {
-		// Unknown type: nothing to do, completing with the reason.
+		// Unknown type: nothing to change, just complete the event (its own
+		// one-transaction commit keeps it out of the queue forever).
 		w.log.Warn("agent worker ignores unknown event type", "type", ev.Type, "id", ev.ID)
-		return nil
+		_, err := w.db.CompleteTurn(ctx, ev.ID, nil, nil, nil)
+		return err
 	}
 
 	speaker, ok, err := w.db.UserByAddress(ctx, ev.Speaker)
@@ -177,6 +345,8 @@ func (w *Worker) process(ctx context.Context, ev model.Event) error {
 	if !ok {
 		return errors.New("listener user does not exist")
 	}
+	// Display names for the turn log lines.
+	names := map[string]string{speaker.Address: speaker.Name, listener.Address: listener.Name}
 
 	chat, found, err := w.db.ChatByAddress(ctx, ev.Chat)
 	if err != nil {
@@ -203,6 +373,26 @@ func (w *Worker) process(ctx context.Context, ev model.Event) error {
 	if err != nil {
 		return err
 	}
+	// Chat start: both users open the dialog with their stored greeting
+	// messages - plain hello bubbles, no LLM turn and no questions. Each
+	// greeting is posted by its OWN author; the starter then gets the next
+	// event to continue with the first question of the conversation.
+	if phase == model.PhaseNetworking && len(msgs) == 0 {
+		return w.commitTurn(ctx, ev, names, turnResult{
+			groups: []turnGroup{
+				{label: "greeting 1/2", bubble: db.TurnBubble{
+					From: ev.Speaker, To: ev.Listener,
+					Contents: []string{greetingOrFallback(speaker, chat.Language)},
+				}},
+				{label: "greeting 2/2", bubble: db.TurnBubble{
+					From: ev.Listener, To: ev.Speaker,
+					Contents: []string{greetingOrFallback(listener, chat.Language)},
+				}},
+			},
+			next: &db.TurnNext{Speaker: ev.Speaker, Listener: ev.Listener},
+		})
+	}
+
 	// Part-1 messages stay saved in the database, but the debate phase
 	// replays only the messages created since phase_started_at onward.
 	if phase == model.PhaseDebate && chat.PhaseStartedAt != nil {
@@ -233,7 +423,7 @@ func (w *Worker) process(ctx context.Context, ev model.Event) error {
 	if overLimit && transition {
 		// The networking part closes with ONE message: an AFTER-step follow-up
 		// personal chat plus an offer to switch to the abstract theme.
-		out, err := w.llm.Complete(ctx, buildTransitionPrompt(theme, speaker, listener, msgs, chat.Language))
+		out, err := w.completeWithRetry(ctx, buildTransitionPrompt(theme, speaker, listener, msgs, chat.Language), chat.Language)
 		if err != nil {
 			return err
 		}
@@ -247,7 +437,7 @@ func (w *Worker) process(ctx context.Context, ev model.Event) error {
 		// question, its text rides along so the farewell can answer it in
 		// the first sentence.
 		last, _ := lastListenerMessage(listener, msgs)
-		out, err := w.llm.Complete(ctx, buildGoodbyePrompt(theme, speaker, last, chat.Language))
+		out, err := w.completeWithRetry(ctx, buildGoodbyePrompt(theme, speaker, last, chat.Language), chat.Language)
 		if err != nil {
 			return err
 		}
@@ -284,7 +474,7 @@ func (w *Worker) process(ctx context.Context, ev model.Event) error {
 				}
 			}
 			prompt := buildPrompt(theme, phase, speaker, listener, msgs, speakerTurns, overLimit, nudge, chat.Language)
-			out, err := w.llm.Complete(ctx, prompt)
+			out, err := w.completeWithRetry(ctx, prompt, chat.Language)
 			if err != nil {
 				return err
 			}
@@ -348,46 +538,48 @@ func (w *Worker) process(ctx context.Context, ev model.Event) error {
 		parts = batch
 	}
 
-	saved, err := w.db.CreateMessages(ctx, ev.Speaker, ev.Listener, parts)
-	if err != nil {
-		return err
-	}
-	for i, m := range saved {
-		w.log.Info("agent message",
-			"chat", ev.Chat, "from", speaker.Name, "to", listener.Name,
-			"part", fmt.Sprintf("%d/%d", i+1, len(saved)), "content", m.Content)
-	}
-
 	switch {
 	case transition:
 		// Part 1 ends HERE: stamp the moment the debate begins (the hobby
 		// messages stay saved for the API) and let the OTHER agent open the
 		// themed part of the chat.
-		if err := w.db.SetChatPhase(ctx, ev.Chat, model.PhaseDebate, time.Now()); err != nil {
+		err := w.commitTurn(ctx, ev, names, turnResult{
+			groups: []turnGroup{{label: "1/1", bubble: db.TurnBubble{
+				From: ev.Speaker, To: ev.Listener, Contents: parts,
+			}}},
+			phase: &db.TurnPhase{Phase: model.PhaseDebate, StartedAt: time.Now()},
+			next:  &db.TurnNext{Speaker: ev.Listener, Listener: ev.Speaker},
+		})
+		if err != nil {
 			return err
 		}
 		w.log.Info("chat phase changed",
 			"chat", ev.Chat, "phase", model.PhaseDebate, "theme", theme.Name)
-		return w.db.EnqueueEvent(ctx, model.EventChatInteract, ev.Chat, ev.Listener, ev.Speaker)
+		return nil
 	case overLimit:
 		// Reply goodbye: a pattern message of the listener, generated
 		// locally without the LLM and without the transcript. The chat ends
 		// here: no further event is queued.
-		reply := goodbyeReply(chat.Language)
-		replyMsgs, err := w.db.CreateMessages(ctx, ev.Listener, ev.Speaker, []string{reply})
-		if err != nil {
-			return err
-		}
-		for _, m := range replyMsgs {
-			w.log.Info("agent message",
-				"chat", ev.Chat, "from", listener.Name, "to", speaker.Name,
-				"part", "goodbye reply", "content", m.Content)
-		}
-		return nil
+		return w.commitTurn(ctx, ev, names, turnResult{
+			groups: []turnGroup{
+				{label: "1/1", bubble: db.TurnBubble{
+					From: ev.Speaker, To: ev.Listener, Contents: parts,
+				}},
+				{label: "goodbye reply", bubble: db.TurnBubble{
+					From: ev.Listener, To: ev.Speaker,
+					Contents: []string{goodbyeReply(chat.Language)},
+				}},
+			},
+		})
 	}
 
 	// Hand the turn to the other agent.
-	return w.db.EnqueueEvent(ctx, model.EventChatInteract, ev.Chat, ev.Listener, ev.Speaker)
+	return w.commitTurn(ctx, ev, names, turnResult{
+		groups: []turnGroup{{label: fmt.Sprintf("1/%d", len(parts)), bubble: db.TurnBubble{
+			From: ev.Speaker, To: ev.Listener, Contents: parts,
+		}}},
+		next: &db.TurnNext{Speaker: ev.Listener, Listener: ev.Speaker},
+	})
 }
 
 // resolveScenario returns the theme of the chat. When the chat has no

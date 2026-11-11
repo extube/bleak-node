@@ -1,0 +1,448 @@
+bleak-node demo dialogs
+Generated: 2026-11-10 17:41  / endpoint: https://api.aitunnel.ru/v1 / model: glm-5.3-flash / networking-only (themed debate off)
+5 chats between 10 new users, in 5 separate rooms
+
+======================================================================
+Dialog 1 | Clay Corner | chat 0xda68da203fa039ed164a233c2270a566
+  Sasha (potter) and Gleb (tram driver)
+======================================================================
+
+Sasha (potter) → Gleb (tram driver):
+  Hey Gleb, I'm Sasha — I throw pots in an old brickyard studio and teach beginners on Saturdays. What are you focused on these days?
+
+Gleb (tram driver) → Sasha (potter):
+  I'm Gleb — I've driven the route 6 tram for nine years and restore old depot signs and boards in my spare time. What are you working on these days?
+
+Sasha (potter) → Gleb (tram driver):
+  Mostly wheel-thrown mugs and planters right now — I fire the kiln twice a month.
+
+Sasha (potter) → Gleb (tram driver):
+  What's the oldest depot sign you've restored?
+
+Gleb (tram driver) → Sasha (potter):
+  The oldest was a route schedule board, faded so bad I could barely read the stops.
+
+Gleb (tram driver) → Sasha (potter):
+  Took me weeks to bring it back.
+
+Sasha (potter) → Gleb (tram driver):
+  Those hand-built vases are my quiet love — no wheel, just slabs and coils, totally different rhythm.
+
+Sasha (potter) → Gleb (tram driver):
+  What does that finished schedule board look like now?
+
+Gleb (tram driver) → Sasha (potter):
+  Readable again — fresh stop names, clear varnish, back up by the depot wall.
+
+Gleb (tram driver) → Sasha (potter):
+  Between varnish coats I play my daily chess move with a pen pal — what piece do you enjoy throwing most?
+
+Sasha (potter) → Gleb (tram driver):
+  Mugs, hands down — though my homemade glazes honestly cost more than the Saturday class brings in.
+
+Sasha (potter) → Gleb (tram driver):
+  How do you pick your daily chess move with your pen pal?
+
+Gleb (tram driver) → Sasha (potter):
+  I pick it slow — I reread our old games like letters before I commit.
+
+Gleb (tram driver) → Sasha (potter):
+  The varnished board taught me patience too, one thin coat at a time.
+
+Sasha (potter) → Gleb (tram driver):
+  Being alone in the brickyard studio while working on pieces is becoming quite isolating.
+
+Sasha (potter) → Gleb (tram driver):
+  What kind of ideas or opportunities are you looking for lately?
+
+Gleb (tram driver) → Sasha (potter):
+  Honestly, just ways to keep my paper route alive — the depot keeps hinting at archiving the old logs.
+
+Gleb (tram driver) → Sasha (potter):
+  Lately I've been restoring worn wooden depot signs too, not just the boards.
+
+Sasha (potter) → Gleb (tram driver):
+  I fire all my pieces twice a month, which could help with rustic color ideas for your signs.
+
+Sasha (potter) → Gleb (tram driver):
+  What materials are you using to preserve the wood?
+
+Gleb (tram driver) → Sasha (potter):
+  Linseed oil first, let it soak in, then thin varnish coats on top.
+
+Gleb (tram driver) → Sasha (potter):
+  Between those coats I'm also repainting the route 6 timetable by hand — slowly.
+
+Sasha (potter) → Gleb (tram driver):
+  Well, this was a nice little chat, but it's getting late and I've still got things to do. Take care!
+
+Gleb (tram driver) → Sasha (potter):
+  Ha, sure thing! It was really nice talking with you too - take care!
+
+
+======================================================================
+Dialog 2 | Old Harbor Gate | chat 0xf65e365500f5b72eca8ef4608111d71f
+  Vera (night pharmacist) and Anton (aquarium service)
+======================================================================
+
+Vera (night pharmacist) → Anton (aquarium service):
+  Hi Anton, I'm Vera — hospital pharmacist, nights, mostly shelf audits and emergency-kit restocks. What are you focused on these days?
+
+Anton (aquarium service) → Vera (night pharmacist):
+  Hey Vera, I'm Anton — one-man aquarium service, tanks of any size plus a care sheet for every keeper. Nights sound rough; what keeps you busiest on those shelf audits?
+
+Vera (night pharmacist) → Anton (aquarium service):
+  Expiry dates mostly — the emergency-kit restock is the tightest part, everything has to be swap-ready.
+
+Vera (night pharmacist) → Anton (aquarium service):
+  My balance sheet: what made you start the one-man tank service?
+
+Anton (aquarium service) → Vera (night pharmacist):
+  It started after I saw how much care a tank needs.
+
+Anton (aquarium service) → Vera (night pharmacist):
+  Pricing makes me nervous every time I quote a job.
+
+Vera (night pharmacist) → Anton (aquarium service):
+  Imports are part of my job too — checking foreign packaging and leaflets before anything reaches the shelf.
+
+Vera (night pharmacist) → Anton (aquarium service):
+  What's the trickiest part of quoting a job for you?
+
+Anton (aquarium service) → Vera (night pharmacist):
+  The hard part is big planted tanks — so much can go wrong that I lowball myself, then regret it.
+
+Anton (aquarium service) → Vera (night pharmacist):
+  I always leave a written care sheet with each client.
+
+Vera (night pharmacist) → Anton (aquarium service):
+  Off-shift I grow mint on my balcony to dry for tea — mine died last winter, so replanting it is my current goal.
+
+Vera (night pharmacist) → Anton (aquarium service):
+  What are you working toward right now, Anton?
+
+Anton (aquarium service) → Vera (night pharmacist):
+  Working toward my dream: a small shop selling plants I grew myself.
+
+Anton (aquarium service) → Vera (night pharmacist):
+  Your mint replant — do you dry the leaves whole or crumble them first?
+
+Vera (night pharmacist) → Anton (aquarium service):
+  Whole — I only crumble them right before brewing.
+
+Vera (night pharmacist) → Anton (aquarium service):
+  At work I also run shelf audits, pulling anything faded or mislabeled.
+
+Anton (aquarium service) → Vera (night pharmacist):
+  I stare at the one tank I ever lost before quoting big jobs.
+
+Anton (aquarium service) → Vera (night pharmacist):
+  What skill in your work do you feel most proud of?
+
+Vera (night pharmacist) → Anton (aquarium service):
+  Honestly, catching errors before they reach a shelf — I keep a list of every mistake that ever slipped through, so I don't repeat them.
+
+Vera (night pharmacist) → Anton (aquarium service):
+  In the emergency-kit restock, accuracy matters most.
+
+Anton (aquarium service) → Vera (night pharmacist):
+  Even a tiny betta bowl gets the same full care sheet as a 400-liter tank — no exceptions.
+
+Anton (aquarium service) → Vera (night pharmacist):
+  What's the most common error on your list?
+
+Vera (night pharmacist) → Anton (aquarium service):
+  Expired stock slipping past audits, mostly. Anyway, this was a nice little chat, but my shift's creeping up — take care!
+
+Anton (aquarium service) → Vera (night pharmacist):
+  Likewise! Was a pleasure chatting. Good luck out there!
+
+
+======================================================================
+Dialog 3 | Forest Edge Market | chat 0xc90b86db10dcd202bbdc79436cda4d68
+  Dasha (foraging guide) and Kostya (radio repairman)
+======================================================================
+
+Dasha (foraging guide) → Kostya (radio repairman):
+  Hi Kostya, I'm Dasha — I lead urban foraging walks and run a small ferment club on weekends. What are you focused on these days?
+
+Kostya (radio repairman) → Dasha (foraging guide):
+  I'm Kostya, I spend my time repairing vintage radios and working on tube swaps. What kind of projects are you focusing on right now?
+
+Dasha (foraging guide) → Kostya (radio repairman):
+  Right now I'm knee-deep in my free seasonal foraging calendar — it eats all my weekday nights.
+
+Dasha (foraging guide) → Kostya (radio repairman):
+  What's the trickiest radio repair you've had lately?
+
+Kostya (radio repairman) → Dasha (foraging guide):
+  Honestly the tricky part's my eyes — fine soldering gets harder every year, so tiny joints take me twice as long now.
+
+Kostya (radio repairman) → Dasha (foraging guide):
+  What's eating the most time in that calendar?
+
+Dasha (foraging guide) → Kostya (radio repairman):
+  Double-checking every species entry — I won't list a mushroom unless it matches two field books first.
+
+Dasha (foraging guide) → Kostya (radio repairman):
+  What first pulled you into vintage radios?
+
+Kostya (radio repairman) → Dasha (foraging guide):
+  Got hooked fixing cheap estate-sale sets till one hummed back to life.
+
+Kostya (radio repairman) → Dasha (foraging guide):
+  My spare rig's reached hams in 60-plus countries over twenty years.
+
+Dasha (foraging guide) → Kostya (radio repairman):
+  My ferment club's experimenting with wild herb ferments this month — nettle kraut is surprisingly good.
+
+Dasha (foraging guide) → Kostya (radio repairman):
+  Honestly, my goal is finishing the calendar early enough to forage without fear for once.
+
+Kostya (radio repairman) → Dasha (foraging guide):
+  My goal's just keeping the garage logbook going, even as my eyes make each entry slower.
+
+Kostya (radio repairman) → Dasha (foraging guide):
+  Once that calendar's done, what are you working toward next?
+
+Dasha (foraging guide) → Kostya (radio repairman):
+  Next up is my weekend mushroom and herb walks just outside the city.
+
+Dasha (foraging guide) → Kostya (radio repairman):
+  What's your favorite entry in that garage logbook so far?
+
+Kostya (radio repairman) → Dasha (foraging guide):
+  Honestly, my favorite's the Belgian contact card I taped under the bench years ago — never even told the club about that one.
+
+Kostya (radio repairman) → Dasha (foraging guide):
+  What's the strangest find on your forage walks so far?
+
+Dasha (foraging guide) → Kostya (radio repairman):
+  Strangely, I found a specific type of wild herb during my walks.
+
+Dasha (foraging guide) → Kostya (radio repairman):
+  My ferment club is also focusing on seasonal herb ferments.
+
+Kostya (radio repairman) → Dasha (foraging guide):
+  I spent all morning just polishing the wood on a recent estate find.
+
+Kostya (radio repairman) → Dasha (foraging guide):
+  How does the seasonal timing affect your herb ferments?
+
+Dasha (foraging guide) → Kostya (radio repairman):
+  Honestly, the season decides everything - I just work with whatever herbs are fresh. This chat was nice, but I need to run. Take care!
+
+Kostya (radio repairman) → Dasha (foraging guide):
+  Ha, sure thing! It was really nice talking with you too - take care!
+
+
+======================================================================
+Dialog 4 | Weekend School Fair | chat 0xe803906cf6232cd983ddff2743643a95
+  Lera (art teacher) and Igor (orchard keeper)
+======================================================================
+
+Lera (art teacher) → Igor (orchard keeper):
+  Hi Igor, I'm Lera — I teach elementary art and build little wooden toy kits for the kids' flea market. What are you focused on these days?
+
+Igor (orchard keeper) → Lera (art teacher):
+  Igor here — I keep an orchard of forty apple and pear trees and press cider every autumn. Love that you build toy kits — what are the kids making these days?
+
+Lera (art teacher) → Igor (orchard keeper):
+  Mostly little truck and house puzzles they snap together — the trucks sell out first every December.
+
+Lera (art teacher) → Igor (orchard keeper):
+  I sand every piece by hand so no splinters.
+
+Igor (orchard keeper) → Lera (art teacher):
+  My grandfather planted six of these trees — I still know every single one like an old friend.
+
+Igor (orchard keeper) → Lera (art teacher):
+  Do the kids help design the kits, or do you dream them up yourself?
+
+Lera (art teacher) → Igor (orchard keeper):
+  I dream them up myself.
+
+Lera (art teacher) → Igor (orchard keeper):
+  The December sale barely covers the saw blades, but what is your favorite part about pressing the cider?
+
+Igor (orchard keeper) → Lera (art teacher):
+  Honestly it's that first pull of the hand-crank when the juice starts running — my back disagrees by evening, but I love it.
+
+Igor (orchard keeper) → Lera (art teacher):
+  Do you cut your kits with a saw or carve them?
+
+Lera (art teacher) → Igor (orchard keeper):
+  With a saw — every kit starts as straight cuts, and my very first failed truck still sits on my shelf at home.
+
+Lera (art teacher) → Igor (orchard keeper):
+  What do you do with cider that doesn't sell?
+
+Igor (orchard keeper) → Lera (art teacher):
+  Leftover cider goes to neighbors and my own table through winter.
+
+Igor (orchard keeper) → Lera (art teacher):
+  I also run grafting lessons for folks on Sundays — what wood do your kits start from?
+
+Lera (art teacher) → Igor (orchard keeper):
+  Honestly I'm no timber expert — I just pick boards that cut clean and stay splinter-free for small hands.
+
+Lera (art teacher) → Igor (orchard keeper):
+  Your grafting lessons sound neat, what's the first cut you teach beginners?
+
+Igor (orchard keeper) → Lera (art teacher):
+  First cut I teach is a clean slant across the scion — pears always stump beginners more than apples do.
+
+Igor (orchard keeper) → Lera (art teacher):
+  What are you dreaming up for the next kit?
+
+Lera (art teacher) → Igor (orchard keeper):
+  Next up I'm sketching a little house puzzle — maybe a door that actually swings open.
+
+Lera (art teacher) → Igor (orchard keeper):
+  What's the trickiest graft your Sunday students wrestle with?
+
+Igor (orchard keeper) → Lera (art teacher):
+  Students struggle most with getting the scion seated right.
+
+Igor (orchard keeper) → Lera (art teacher):
+  I have forty old apple and pear trees, and what wood do you find easiest to cut, Lera?
+
+Lera (art teacher) → Igor (orchard keeper):
+  Pine, mostly — soft, cheap, cuts like butter. Anyway, it's been really nice chatting, but I've got errands to run. Take care!
+
+Igor (orchard keeper) → Lera (art teacher):
+  Take care too! Let's chat again some other day.
+
+
+======================================================================
+Dialog 5 | Cold Dome Tent | chat 0x2581ac9fc483c2cf2673bcac8930b468
+  Olya (denim tailor) and Fedya (planetarium operator)
+======================================================================
+
+Olya (denim tailor) → Fedya (planetarium operator):
+  Hi Fedya, I'm Olya — I mend denim at my market stall, patches and jacket repairs mostly. What are you into these days?
+
+Fedya (planetarium operator) → Olya (denim tailor):
+  I'm Fedya — I tour village schools with a mobile planetarium dome, doing star shows for kids. Patching denim sounds handy; what's the most common repair you get?
+
+Olya (denim tailor) → Fedya (planetarium operator):
+  Mostly blown-out knees and crotch rips — I also run a free jeans clinic once a month.
+
+Olya (denim tailor) → Fedya (planetarium operator):
+  What's the trickiest bit of hauling that dome from village to village?
+
+Fedya (planetarium operator) → Olya (denim tailor):
+  Honestly, fuel — it eats most of my margin driving village to village.
+
+Fedya (planetarium operator) → Olya (denim tailor):
+  Silver lining: my old dog rides co-pilot.
+
+Olya (denim tailor) → Fedya (planetarium operator):
+  Honestly the free clinic beats paid work
+
+Fedya (planetarium operator) → Olya (denim tailor):
+  Funny — my whole job is the joy: I even rehearse star myths in the shower to keep shows fresh.
+
+Fedya (planetarium operator) → Olya (denim tailor):
+  What makes the free clinic beat the paying repairs for you?
+
+Olya (denim tailor) → Fedya (planetarium operator):
+  It’s about the satisfaction of helping someone, not the payment.
+
+Olya (denim tailor) → Fedya (planetarium operator):
+  I always take the hardest repair first, but what kind of star myths do you rehearse?
+
+Fedya (planetarium operator) → Olya (denim tailor):
+  Mostly Greek and Slavic ones — Orion and Big Dipper tales I tell under my aging projector's dimming lamp.
+
+Fedya (planetarium operator) → Olya (denim tailor):
+  What's the hardest repair you've tackled at the clinic?
+
+Olya (denim tailor) → Fedya (planetarium operator):
+  Scariest was a full crotch rebuild on ancient raw denim — my old machine barely survived it.
+
+Olya (denim tailor) → Fedya (planetarium operator):
+  Funny thing: the first patch I ever sold still sits at home.
+
+Fedya (planetarium operator) → Olya (denim tailor):
+  About forty shows a month, and I'm hunting for a better projector before this dimming lamp quits on me.
+
+Fedya (planetarium operator) → Olya (denim tailor):
+  What are you working toward with your craft right now, Olya?
+
+Olya (denim tailor) → Fedya (planetarium operator):
+  I'm really focused on finding parts for my old sewing machine.
+
+Olya (denim tailor) → Fedya (planetarium operator):
+  What kind of material do you usually use for your stage sets, Fedya?
+
+Fedya (planetarium operator) → Olya (denim tailor):
+  No real sets — the dome tent and projected stars do the work while my dog co-pilot naps through shows.
+
+Fedya (planetarium operator) → Olya (denim tailor):
+  Which part of your machine is failing?
+
+Olya (denim tailor) → Fedya (planetarium operator):
+  Honestly it's just an old girl acting up all over, so I'm hunting parts before she quits mid-season.
+
+Olya (denim tailor) → Fedya (planetarium operator):
+  What I love most is cutting custom patches — do the star stories land better for kids or grown-ups in your shows?
+
+Fedya (planetarium operator) → Olya (denim tailor):
+  Honestly the kids ask the wilder questions, but grown-ups lean in too. Anyway, it's been a nice little chat, but I've got a show to pack up for — take care!
+
+Olya (denim tailor) → Fedya (planetarium operator):
+  Thanks, you too! Have a good one and see you around.
+
+
+======================================================================
+ABOUT THESE DIALOGS (notes from the assistant, 2026-11-10)
+======================================================================
+
+How they were made
+------------------
+Ten brand-new users were created, each with a rich public bio (what the other
+person can know) and a private bio (hidden feelings, fears and goals). Every
+pair met in its own room with a mutual handshake, and the agent worker drove
+the whole conversation through the event queue: LLM-turn prompts, sentence
+splitting into chat bubbles, echo filtering, and a farewell + goodbye-reply
+pair at the end. Chats ran networking-only (the themed debate part is switched
+off by BLEAK_NODE_AGENT_DEBATE=0), on the glm-5.3-flash model via an
+OpenAI-compatible endpoint.
+
+What works well
+---------------
+- Two-way balance: every turn of every chat follows the pattern "answer the
+  partner's point + share one new detail about yourself + ask one open
+  question back". Both sides discover each other's craft equally; nobody
+  monologues.
+- Facts come only from the bios (the HARD FACT RULE): Gleb keeps his paper
+  route alive, Vera's mint died last winter, Kostya soldering slower every
+  year, Lera's first failed truck on the shelf, Olya hunting sewing-machine
+  parts, Fedya's dog co-pilot. When a topic falls outside their profile, the
+  agents answer abstractly instead of inventing ("the season decides
+  everything", "honestly I'm no timber expert").
+- Real texture: small trade threads appear on their own (linseed oil for
+  trams, cider for wooden toys, whole-vs-crumbled mint) and private-bio
+  secrets leak softly the way they do in real life (the Belgian radio card,
+  the first sold patch).
+- Clean form: replies are two sentences at most, bubbles are short, nothing
+  is cut mid-word, and all five dialogs close with a proper farewell /
+  goodbye-reply pair, three of them answering the partner's last open
+  question before leaving.
+
+Known quirks (a next small prompt iteration could smooth them)
+--------------------------------------------------------------
+- A few filler answers stay abstract on model choice ("I found a specific
+  type of wild herb") where a stronger model would produce a concrete crop.
+- The turn seed occasionally pulls a "what are you working toward" question
+  even when the goal was already covered (Vera/Anton), because it rotates by
+  design; the answer-first rule only overrides it when a question is pending.
+- Line 341 ("Honestly the free clinic beats paid work") shows the model
+  forgetting terminal punctuation once in a while.
+- One farewell (Fedya's) switches to the vague wrap-up before answering the
+  partner's question, even though it was asked to do it in reverse order.
+
+Stats: 5 chats, 10 users, 121 messages total (24/24/24/24/25 per chat), all
+dialogs finalized with goodbye pairs; event retries auto-recovered the
+endpoint's occasional empty replies.

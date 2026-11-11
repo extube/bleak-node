@@ -4,21 +4,11 @@
 #   - merge commits into dev are only allowed when syncing FROM main
 #     (feature branches merge into dev with `git merge --squash`)
 #   - every working branch must be named feat|bug|hotfix/#<task>-<slug>
-#   - every commit carries the canonical repo identity (extube)
-want_name="extube"
-want_email="extube@proton.me"
+#   - every commit carries the contributor identity from .env
+#     (GITHUB_NAME / GITHUB_EMAIL) - see .githooks/identity.sh
 
-# Identity guard: reject commits made with a wrong git identity, so no
-# foreign author ever lands in the history (however the machine is set up).
-cn=$(git config user.name || true)
-ce=$(git config user.email || true)
-if [ "$cn" != "$want_name" ] || [ "$ce" != "$want_email" ]; then
-  echo >&2 "BLOCKED: commits must be authored as $want_name <$want_email>."
-  echo >&2 "        This machine has: ${cn:-unset} <${ce:-unset}>"
-  echo >&2 "        Fix with:  git config user.name \"$want_name\""
-  echo >&2 "                   git config user.email \"$want_email\""
-  exit 1
-fi
+# Identity guard: sourced = enforced; declines any other identity.
+. "$(git rev-parse --show-toplevel)/.githooks/identity.sh"
 
 branch=$(git symbolic-ref --quiet --short HEAD || true)
 

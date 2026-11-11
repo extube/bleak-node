@@ -66,11 +66,14 @@ Never add quotes, labels like "Agent:", markdown, or explanations; never write r
 		} else {
 			b.WriteString(fmt.Sprintf("This is the opening of the themed part. Share your first view briefly through your own work or hobby, and ask the partner's view.\nTheme opening: %s\n", theme.Scenario.Hello))
 		}
-	case speakerTurns == 0:
+	case phase == model.PhaseNetworking && speakerTurns == 1 && len(msgs) == 2 && msgs[0].From == speaker.Address:
+		// The greeting messages are exchanged (both are stored user
+		// greetings, no questions): the chat opener continues with the
+		// first question of the conversation instead of re-introducing.
 		if russian {
-			b.WriteString(fmt.Sprintf("Знакомство: коротко и по-человечески представься %s — назови имя и чем занимаешься. Естественно спроси, чем %s сейчас увлекается или занят(а). Не звучай как анкета.\n", listener.Name, listener.Name))
+			b.WriteString(fmt.Sprintf("Приветствия уже обменяны: вы уже представились в своём приветствии — не представляйтесь снова.\nПродолжите разговор: естественно отреагируйте на приветствие %s и задайте один короткий открытый вопрос о его занятии или увлечении.\n", listener.Name))
 		} else {
-			b.WriteString(fmt.Sprintf("INTRO: introduce yourself to %s casually—your name and what you do. Naturally ask what they are into or focused on lately; don't sound like a questionnaire.\n", listener.Name))
+			b.WriteString(fmt.Sprintf("The greeting messages have been exchanged: you already introduced yourself in your greeting - do not introduce yourself again.\nContinue the conversation: respond naturally to %s's greeting, then ask ONE short open question about their work, business or hobby.\n", listener.Name))
 		}
 	case phase == model.PhaseDebate:
 		if russian {
@@ -441,23 +444,29 @@ func questionDirect(listener model.User, lastMsg, language string) string {
 
 // goodbyeReplies are pattern acknowledgements a listener may answer a
 // farewell with: short, polite, generic — no conversation content. The
-// worker picks one of them locally without calling the LLM.
+// worker picks one of them locally without calling the LLM. Some carry an
+// emoji for warmth; plain ones stay in the list too, so a goodbye without
+// emoji happens as well.
 var goodbyeReplies = []string{
-	"Ha, sure thing! It was really nice talking with you too - take care!",
-	"Thanks, you too! Have a good one and see you around.",
-	"Likewise! Was a pleasure chatting. Good luck out there!",
+	"Ha, sure thing! It was really nice talking with you too - take care! 👋",
+	"Thanks, you too! Have a good one and see you around 🙂",
+	"Likewise! Was a pleasure chatting. Good luck out there! ☀️",
 	"Take care too! Let's chat again some other day.",
-	"Sounds good, thanks! Have a great day and stay well.",
+	"Sounds good, thanks! Have a great day and stay well 🌿",
 	"Thanks a lot, same here! Keep in touch and be safe.",
+	"You too! It was a real pleasure — talk soon 👋",
+	"Thanks, same to you! See you around.",
 }
 
 var goodbyeRepliesRU = []string{
-	"Да, конечно! Было приятно поболтать. Давай, береги себя!",
-	"Спасибо, и тебе хорошего дня! Ещё спишемся.",
-	"Мне тоже было приятно пообщаться. Удачи тебе!",
+	"Да, конечно! Было приятно поболтать. Давай, береги себя! 👋",
+	"Спасибо, и тебе хорошего дня! Ещё спишемся 🙂",
+	"Мне тоже было приятно пообщаться. Удачи тебе! ☀️",
 	"Давай, до связи! Может, ещё как-нибудь поболтаем.",
-	"Спасибо! Хорошего дня и береги себя.",
+	"Спасибо! Хорошего дня и береги себя 🌿",
 	"И тебе спасибо за разговор. Пока!",
+	"И тебе! Было приятно, давай до связи 👋",
+	"Спасибо, и тебе! Удачи и до встречи.",
 }
 
 // goodbyeReply returns one greeting-like reply to a farewell.

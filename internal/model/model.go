@@ -2,24 +2,30 @@ package model
 
 import "time"
 
-// Room is a chatroom / location addressed by a unique address.
+// Room is a chatroom / location addressed by a unique address. The room
+// language (en or ru) is the single language of everything inside it: the
+// users' greetings, their chats and every message.
 type Room struct {
 	Address     string     `json:"address" example:"0xroom123"`
 	Name        string     `json:"name" example:"Meta Room"`
 	Description string     `json:"description" example:"A room for bleak meetings"`
+	Language    string     `json:"language" example:"en"`
 	MaxUser     int        `json:"max_user" example:"100"`
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
 	DeletedAt   *time.Time `json:"deleted_at"`
 }
 
-// User is a person linked to a room.
+// User is a person linked to a room. The user language is inherited from
+// the room and defines the language of the greeting (hello) message.
 type User struct {
 	Address    string     `json:"address" example:"0xuser123"`
 	Name       string     `json:"name" example:"Alice"`
 	Room       string     `json:"room" example:"0xroom123"`
 	PublicBio  string     `json:"public_bio" example:"public hello"`
 	PrivateBio string     `json:"private_bio" example:"real me"`
+	Greeting   string     `json:"greeting" example:"Hi, I'm Alice — I paint watercolor postcards."`
+	Language   string     `json:"language" example:"en"`
 	CreatedAt  time.Time  `json:"created_at"`
 	UpdatedAt  time.Time  `json:"updated_at"`
 	DeletedAt  *time.Time `json:"deleted_at"`
@@ -82,6 +88,9 @@ type Event struct {
 	Error       string     `json:"error" example:""`
 	CreatedAt   time.Time  `json:"created_at"`
 	ProcessedAt *time.Time `json:"processed_at"`
+	// NotBefore is the earliest moment the event may start again (retry
+	// backoff); nil means immediately eligible.
+	NotBefore *time.Time `json:"not_before,omitempty"`
 }
 
 // Validation limits.
