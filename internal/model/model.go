@@ -88,6 +88,9 @@ type Event struct {
 	Error       string     `json:"error" example:""`
 	CreatedAt   time.Time  `json:"created_at"`
 	ProcessedAt *time.Time `json:"processed_at"`
+	// NotBefore is the earliest moment the event may start again (retry
+	// backoff); nil means immediately eligible.
+	NotBefore *time.Time `json:"not_before,omitempty"`
 }
 
 // Validation limits.

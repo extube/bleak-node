@@ -59,6 +59,26 @@ func (d *DB) CreateMessage(ctx context.Context, m *model.Message) error {
 	return errors.Join(ErrConflict, errors.New("could not generate unique message tx_id"))
 }
 
+// insertMessageOn inserts one message row on the given executor (tx or db),
+// generating and retrying the server-side tx_id on the unlikely collision.
+// The caller validated the chat and the language beforehand.
+func insertMessageOn(ctx context.Context, q execContext, m *model.Message) error {
+	for attempt := 0; attempt < 3; attempt++ {
+		m.TxID = newTxID()
+		_, err := q.ExecContext(ctx,
+			`INSERT INTO messages (tx_id, "from", "to", created_at, content, chat) VALUES (?, ?, ?, ?, ?, ?)`,
+			m.TxID, m.From, m.To, m.CreatedAt.Format(time.RFC3339), m.Content, m.Chat)
+		if isUnique(err) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		return nil
+	}
+	return errors.Join(ErrConflict, errors.New("could not generate unique message tx_id"))
+}
+
 // CreateMessages writes several messages of ONE interaction atomically:
 // the chat lookup and the user checks run once, and every message is
 // inserted within the same transaction. It is used by the agent worker for
@@ -111,21 +131,8 @@ func (d *DB) CreateMessages(ctx context.Context, from, to string, contents []str
 			Chat:      chat.Address,
 			CreatedAt: time.Now().UTC(),
 		}
-		for attempt := 0; attempt < 3; attempt++ {
-			m.TxID = newTxID()
-			_, err := tx.ExecContext(ctx,
-				`INSERT INTO messages (tx_id, "from", "to", created_at, content, chat) VALUES (?, ?, ?, ?, ?, ?)`,
-				m.TxID, m.From, m.To, m.CreatedAt.Format(time.RFC3339), m.Content, m.Chat)
-			if isUnique(err) {
-				continue
-			}
-			if err != nil {
-				return nil, err
-			}
-			break
-		}
-		if m.TxID == "" {
-			return nil, errors.Join(ErrConflict, errors.New("could not generate unique message tx_id"))
+		if err := insertMessageOn(ctx, tx, &m); err != nil {
+			return nil, err
 		}
 		out = append(out, m)
 	}

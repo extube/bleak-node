@@ -195,11 +195,17 @@ func (d *DB) ChatPhase(ctx context.Context, address string) (string, bool, error
 // floored to the NEXT second: every message of the finished part sits
 // strictly before the boundary, boundary-adjacent ones included.
 func (d *DB) SetChatPhase(ctx context.Context, address, phase string, startedAt time.Time) error {
+	return setChatPhaseOn(ctx, d, address, phase, startedAt)
+}
+
+// setChatPhaseOn is SetChatPhase on the given executor (tx or db), so the
+// phase stamp can commit atomically with the turn that caused it.
+func setChatPhaseOn(ctx context.Context, q execContext, address, phase string, startedAt time.Time) error {
 	stamp := ""
 	if !startedAt.IsZero() {
 		stamp = startedAt.UTC().Truncate(time.Second).Add(time.Second).Format(time.RFC3339)
 	}
-	res, err := d.ExecContext(ctx,
+	res, err := q.ExecContext(ctx,
 		`UPDATE chats SET phase = ?, phase_started_at = ? WHERE address = ?`, phase, stamp, address)
 	if err != nil {
 		return err
