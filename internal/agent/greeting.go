@@ -33,25 +33,71 @@ func NewGreeter(llm *Client) *Greeter {
 func (g *Greeter) GenerateGreeting(name, publicBio, privateBio, language string) string {
 	russian := isRussian(language)
 	prompt := greetingPrompt(name, publicBio, privateBio, russian)
+	good := func(c string) bool {
+		return c != "" && !strings.ContainsRune(c, '?') &&
+			model.TextMatchesLanguage(c, language) &&
+			strings.Contains(strings.ToLower(c), strings.ToLower(name))
+	}
 	var candidate string
 	for i := 0; i < 3; i++ {
 		out, err := g.llm.Complete(context.Background(), prompt)
 		if err != nil {
 			break // gateway unreachable: the template takes over
 		}
-		candidate = sanitizeContent(strings.TrimSpace(out))
-		if candidate != "" && !strings.ContainsRune(candidate, '?') {
+		candidate = fitSentences(sanitizeContent(strings.TrimSpace(out)))
+		if good(candidate) {
 			return candidate
 		}
 		if i < 2 {
 			time.Sleep(time.Duration(i+1) * 500 * time.Millisecond)
 		}
 	}
-	// The best candidate may only need its question sentence dropped.
-	if clean := withoutQuestions(candidate); strings.TrimSpace(clean) != "" {
+	// The best candidate may only need its question sentence dropped; the
+	// salvage still has to name the user and speak the room language.
+	if clean := fitSentences(withoutQuestions(candidate)); good(clean) {
 		return clean
 	}
 	return FallbackGreeting(name, publicBio, russian)
+}
+
+// fitSentences keeps the longest run of complete sentences that fits the
+// message limit: a greeting cut mid-word ("... пахнет ванилью и") reads
+// broken in the chat. The sentence carrying a question mark is dropped
+// entirely - greetings are statements only.
+func fitSentences(s string) string {
+	if q := strings.IndexRune(s, '?'); q >= 0 {
+		head := ""
+		for i := q; i >= 0; i-- {
+			if strings.ContainsRune(".!", rune(s[i])) {
+				head = s[:i+1]
+				break
+			}
+		}
+		s = strings.TrimSpace(head)
+		if s == "" {
+			return s
+		}
+	}
+	runes := []rune(s)
+	acc := make([]rune, 0, len(runes))
+	lastGood := ""
+	for _, r := range runes {
+		acc = append(acc, r)
+		if r == '.' || r == '!' || r == '…' {
+			if len(acc) <= model.MaxMessageContentLen {
+				lastGood = strings.TrimSpace(string(acc))
+			}
+			if len(acc) >= model.MaxMessageContentLen {
+				break
+			}
+		}
+	}
+	if lastGood != "" {
+		return lastGood
+	}
+	// No complete sentence fits (or none found): best effort is the
+	// word-boundary trim.
+	return trimAndLimit(runes, model.MaxMessageContentLen)
 }
 
 // greetingPrompt builds the one-message generation prompt for a greeting:

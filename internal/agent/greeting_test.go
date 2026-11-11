@@ -24,8 +24,9 @@ func (f *fakeGreetLLM) Complete(ctx context.Context, prompt []llmMessage) (strin
 }
 
 func TestGenerateGreetingNoQuestions(t *testing.T) {
-	// The first answer carries a question, the second is clean: the
-	// greeter must return the clean one, never the question.
+	// The first answer carries a question: its statement part survives
+	// (the question sentence is dropped), so the greeting is salvaged
+	// without the question.
 	g := &Greeter{llm: &fakeGreetLLM{answers: []string{
 		"Hi, I'm Mark - antique clocks. What brings you here?",
 		"Hi, I'm Mark - I repair antique clocks on the market square.",
@@ -34,8 +35,8 @@ func TestGenerateGreetingNoQuestions(t *testing.T) {
 	if strings.ContainsRune(got, '?') {
 		t.Fatalf("greeting contains a question: %q", got)
 	}
-	if !strings.Contains(got, "market square") {
-		t.Fatalf("greeting = %q, want the clean answer", got)
+	if got != "Hi, I'm Mark - antique clocks." {
+		t.Fatalf("greeting = %q, want the salvaged statement", got)
 	}
 }
 
@@ -110,5 +111,26 @@ func TestBuildPromptFirstGeneratedTurn(t *testing.T) {
 	prompt = buildPrompt(theme, "networking", listener, speaker, append(msgs, model.Message{From: "0xa", Content: "So, what's new?"}), 1, false, "", "en")
 	if strings.Contains(prompt[1].Content, "greeting messages have been exchanged") {
 		t.Fatal("later turn must use the normal networking prompt")
+	}
+}
+
+func TestFitSentences(t *testing.T) {
+	// A long greeting truncated by the 255-symbol cap loses its dangling
+	// last words: only complete sentences survive.
+	long := "Привет! Я Кирилл, пекарь-кондитер. Держу маленькую пекарню с авторскими пирогами — заходи, у нас всегда пахнет ванилью и корицей, а по выходным печём что-то особенное, например медовик с заварным кремом или пирог с лесными ягодами, который особенно нравится постоянным гостям пекарни."
+	got := fitSentences(sanitizeContent(long))
+	if got == "" || strings.ContainsRune(got, '?') {
+		t.Fatalf("fit = %q", got)
+	}
+	last := []rune(got)[len([]rune(got))-1]
+	if !strings.ContainsRune(".!", last) {
+		t.Fatalf("fit does not end with a sentence ender: %q", got)
+	}
+	if len([]rune(got)) > model.MaxMessageContentLen {
+		t.Fatalf("fit exceeds the message limit: %d", len([]rune(got)))
+	}
+	// Short greetings pass through untouched.
+	if got := fitSentences("Привет! Я Кирилл."); got != "Привет! Я Кирилл." {
+		t.Fatalf("short fit = %q", got)
 	}
 }
