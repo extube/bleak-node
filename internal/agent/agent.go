@@ -133,11 +133,10 @@ func (w *Worker) completeWithRetry(ctx context.Context, prompt []llmMessage, wan
 // only touches chats whose silence no live queue activity explains.
 const (
 	revivalSweepEvery = 30 * time.Second
-	// revivalMsgSilence: the last message must be older than this.
+	// revivalMsgSilence: the last message must be older than this - one
+	// live turn takes seconds to ~90s, so a longer silence with NO pending
+	// or processing event means the chain is broken.
 	revivalMsgSilence = 3 * time.Minute
-	// revivalQueueQuiet: no event of the chat may have finished (or failed)
-	// within this window, so backed-off retries are not second-guessed.
-	revivalQueueQuiet = 10 * time.Minute
 )
 
 // Run processes the queue until ctx is cancelled. Processing events of a
@@ -297,7 +296,7 @@ func backoffDelay(attempt int) time.Duration {
 // manually failed event), the dialog resumes on its own.
 func (w *Worker) revive(ctx context.Context) {
 	markers := append(append([]string{}, goodbyeReplies...), goodbyeRepliesRU...)
-	stalled, err := w.db.StalledChats(ctx, revivalMsgSilence, revivalQueueQuiet, markers)
+	stalled, err := w.db.StalledChats(ctx, revivalMsgSilence, markers)
 	if err != nil {
 		w.log.Error("revival sweep", "err", err)
 		return

@@ -257,14 +257,12 @@ type StalledChat struct {
 }
 
 // StalledChats returns chats that look stalled: they carry messages, have no
-// pending or processing event, their last message is older than
-// messageSilence and their latest queue activity (any status) is older than
-// queueQuiet - so neither a running turn nor a backed-off retry explains the
-// silence. Chats whose last message matches one of the closedMarkers (the
-// pattern goodbyes that end every conversation) are healthy and skipped.
-func (d *DB) StalledChats(ctx context.Context, messageSilence, queueQuiet time.Duration, closedMarkers []string) ([]StalledChat, error) {
+// pending or processing event (so neither a running turn nor a backed-off
+// retry explains the silence), and their last message is older than
+// messageSilence. Chats whose last message matches one of the closedMarkers
+// (the pattern goodbyes that end every conversation) are healthy and skipped.
+func (d *DB) StalledChats(ctx context.Context, messageSilence time.Duration, closedMarkers []string) ([]StalledChat, error) {
 	msgCutoff := time.Now().UTC().Add(-messageSilence).Format(time.RFC3339)
-	queueCutoff := time.Now().UTC().Add(-queueQuiet).Format(time.RFC3339)
 	rows, err := d.QueryContext(ctx, `
 SELECT c.address,
        MIN(p.user), MAX(p.user),
@@ -275,10 +273,9 @@ FROM chats c
 JOIN participants p ON p.chat = c.address
 WHERE EXISTS (SELECT 1 FROM messages WHERE chat = c.address)
   AND NOT EXISTS (SELECT 1 FROM events WHERE chat = c.address AND status IN (?, ?))
-  AND NOT EXISTS (SELECT 1 FROM events WHERE chat = c.address AND COALESCE(processed_at, created_at) >= ?)
 GROUP BY c.address
 HAVING (SELECT m.created_at FROM messages m WHERE m.chat = c.address ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1) <= ?`,
-		EventPending, EventProcessing, queueCutoff, msgCutoff)
+		EventPending, EventProcessing, msgCutoff)
 	if err != nil {
 		return nil, err
 	}

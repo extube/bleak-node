@@ -190,6 +190,7 @@ func TestStalledChats(t *testing.T) {
 	seedPairFixture(t, d, "0xchat")
 	seedPairFixture(t, d, "0xchat2")
 	seedPairFixture(t, d, "0xchat3")
+	seedPairFixture(t, d, "0xchat4")
 	ctx := context.Background()
 
 	old := time.Now().UTC().Add(-30 * time.Minute)
@@ -203,18 +204,39 @@ func TestStalledChats(t *testing.T) {
 	if err := d.EnqueueEvent(ctx, model.EventChatInteract, "0xchat3", "0xa", "0xb"); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
+	// 0xchat4: its only event failed long ago - the attempts are exhausted,
+	// the chain is broken; the sweep revives it.
+	seedMessage(t, d, "0xchat4", "0xa", "0xb", "Nice weather today!", old)
+	seedMessage(t, d, "0xchat4", "0xb", "0xa", "Sure is.", old)
+	if err := d.EnqueueEvent(ctx, model.EventChatInteract, "0xchat4", "0xa", "0xb"); err != nil {
+		t.Fatalf("enqueue: %v", err)
+	}
+	if _, err := d.ExecContext(ctx,
+		`UPDATE events SET status = ?, processed_at = ? WHERE chat = '0xchat4'`,
+		EventFailed, old.Format(time.RFC3339)); err != nil {
+		t.Fatalf("fail event: %v", err)
+	}
 
 	markers := []string{"Давай, до связи! Может, ещё как-нибудь поболтаем."}
-	stalled, err := d.StalledChats(ctx, 3*time.Minute, 10*time.Minute, markers)
+	stalled, err := d.StalledChats(ctx, 3*time.Minute, markers)
 	if err != nil {
 		t.Fatalf("stalled: %v", err)
 	}
-	if len(stalled) != 1 || stalled[0].Chat != "0xchat" {
-		t.Fatalf("stalled chats = %+v, want only 0xchat", stalled)
+	if len(stalled) != 2 {
+		t.Fatalf("stalled chats = %+v, want 0xchat and 0xchat4", stalled)
 	}
-	s := stalled[0]
+	byChat := map[string]StalledChat{}
+	for _, s := range stalled {
+		byChat[s.Chat] = s
+	}
+	s := byChat["0xchat"]
 	// The last message of 0xchat is from 0xa, so 0xb speaks next.
 	if s.LastFrom != "0xa" || s.Other != "0xb" {
 		t.Fatalf("revival hand-off = %s -> %s, want 0xa -> 0xb", s.Other, s.LastFrom)
+	}
+	s4 := byChat["0xchat4"]
+	// The last message of 0xchat4 is from 0xb, so 0xa speaks next.
+	if s4.LastFrom != "0xb" || s4.Other != "0xa" {
+		t.Fatalf("revival hand-off 4 = %s -> %s, want 0xb -> 0xa", s4.Other, s4.LastFrom)
 	}
 }
