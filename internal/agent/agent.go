@@ -240,20 +240,26 @@ func (w *Worker) process(ctx context.Context, ev model.Event) error {
 		return err
 	}
 	// Chat start: both users open the dialog with their stored greeting
-	// messages - plain hello bubbles, no LLM turn and no questions. The
-	// starter then gets the next event to continue with the first
-	// question of the conversation.
+	// messages - plain hello bubbles, no LLM turn and no questions. Each
+	// greeting is posted by its OWN author; the starter then gets the next
+	// event to continue with the first question of the conversation.
 	if phase == model.PhaseNetworking && len(msgs) == 0 {
-		greetings, err := w.db.CreateMessages(ctx, ev.Speaker, ev.Listener, []string{
+		opening, err := w.db.CreateMessages(ctx, ev.Speaker, ev.Listener, []string{
 			greetingOrFallback(speaker, chat.Language),
+		})
+		if err != nil {
+			return err
+		}
+		reply, err := w.db.CreateMessages(ctx, ev.Listener, ev.Speaker, []string{
 			greetingOrFallback(listener, chat.Language),
 		})
 		if err != nil {
 			return err
 		}
+		greetings := append(append([]model.Message{}, opening...), reply...)
 		for i, m := range greetings {
 			w.log.Info("agent message",
-				"chat", ev.Chat, "from", speaker.Name, "to", listener.Name,
+				"chat", ev.Chat, "from", m.From, "to", m.To,
 				"part", fmt.Sprintf("greeting %d/%d", i+1, len(greetings)), "content", m.Content)
 		}
 		return w.db.EnqueueEvent(ctx, model.EventChatInteract, ev.Chat, ev.Speaker, ev.Listener)
