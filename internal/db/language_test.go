@@ -22,19 +22,19 @@ func TestRoomLanguageFlowsDown(t *testing.T) {
 
 	// A Russian room: everything inside it must be Russian.
 	room := model.Room{Name: "Русная комната", Language: "ru"}
-	if err := database.CreateRoom(ctx, &room); err != nil {
+	if err := database.CreateRoom(ctx, &room, ""); err != nil {
 		t.Fatalf("create room: %v", err)
 	}
 
 	userA := model.User{Name: "Аня"}
-	if err := database.CreateUser(ctx, room.Address, &userA); err != nil {
+	if err := database.CreateUser(ctx, room.Address, &userA, ""); err != nil {
 		t.Fatalf("create user A: %v", err)
 	}
 	if userA.Language != "ru" {
 		t.Fatalf("user language = %q, want ru (inherited from the room)", userA.Language)
 	}
 	userB := model.User{Name: "Борис"}
-	if err := database.CreateUser(ctx, room.Address, &userB); err != nil {
+	if err := database.CreateUser(ctx, room.Address, &userB, ""); err != nil {
 		t.Fatalf("create user B: %v", err)
 	}
 

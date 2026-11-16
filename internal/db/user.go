@@ -10,10 +10,11 @@ import (
 	"github.com/extube/bleak-node/internal/model"
 )
 
-// CreateUser inserts a user linked to the given room and atomically creates
-// the system "welcome" handshake (room -> user, value 10) so the user starts
-// with a positive balance. Rooms have a max_user capacity.
-func (d *DB) CreateUser(ctx context.Context, roomAddress string, user *model.User) error {
+// CreateUser inserts a user linked to the given room, stores the hash of
+// the client-generated persona token, and atomically creates the system
+// "welcome" handshake (room -> user, value 10) so the user starts with a
+// positive balance. Rooms have a max_user capacity.
+func (d *DB) CreateUser(ctx context.Context, roomAddress string, user *model.User, tokenHash string) error {
 	tx, err := d.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -55,10 +56,10 @@ func (d *DB) CreateUser(ctx context.Context, roomAddress string, user *model.Use
 	for attempt := 0; attempt < 3; attempt++ {
 		user.Address = newAddress(16)
 		_, err = tx.ExecContext(ctx,
-			`INSERT INTO users (address, name, room, public_bio, private_bio, greeting, language, created_at, updated_at, deleted_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+			`INSERT INTO users (address, name, room, public_bio, private_bio, greeting, language, token_hash, created_at, updated_at, deleted_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
 			user.Address, user.Name, roomAddress, user.PublicBio, user.PrivateBio, user.Greeting, user.Language,
-			user.CreatedAt.Format(time.RFC3339), user.UpdatedAt.Format(time.RFC3339),
+			tokenHash, user.CreatedAt.Format(time.RFC3339), user.UpdatedAt.Format(time.RFC3339),
 		)
 		if isUnique(err) {
 			continue
@@ -121,17 +122,7 @@ func (d *DB) UserExists(ctx context.Context, address string) (bool, error) {
 // UserByAddress returns a user by address regardless of its room (also
 // soft-deleted rows: the agent worker needs the bios even then).
 func (d *DB) UserByAddress(ctx context.Context, address string) (model.User, bool, error) {
-	row := d.QueryRowContext(ctx,
-		`SELECT address, name, room, public_bio, private_bio, greeting, language, created_at, updated_at, deleted_at
-		 FROM users WHERE address = ?`, address)
-	user, err := scanUser(row)
-	if errors.Is(err, sql.ErrNoRows) {
-		return model.User{}, false, nil
-	}
-	if err != nil {
-		return model.User{}, false, err
-	}
-	return user, true, nil
+	return UserByAddressOn(ctx, d, address)
 }
 
 // UpdateUser updates name/bios of a non-deleted user inside the given room.

@@ -33,12 +33,34 @@ func (d *DB) CreateHandshake(ctx context.Context, hs *model.Handshake) (bool, er
 		return false, errors.Join(ErrInvalid, fmt.Errorf("status %d is not in {1,2,3,4}", hs.Status))
 	}
 
+	// Everything runs in one transaction: the handshake insert and the
+	// automatic chat creation are atomic (single-writer pool makes the tx safe).
+	tx, err := d.BeginTx(ctx, nil)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	created, err := createHandshakeOn(ctx, tx, hs, false)
+	if err != nil {
+		return false, err
+	}
+	return created, tx.Commit()
+}
+
+// createHandshakeOn is CreateHandshake on the given executor (tx or db), so
+// a caller can bundle several handshakes with other writes into one atomic
+// transaction (the mutual-QR handshake does exactly that). skipBalance
+// disables the income>outcome rule: the mutual endpoint applies the rule
+// only to the caller's own direction. The status validation stays with the
+// public CreateHandshake; internal callers pass a valid status.
+func createHandshakeOn(ctx context.Context, q rowQuerier, hs *model.Handshake, skipBalance bool) (bool, error) {
 	// Both users must exist and must interact within one room.
 	var (
 		users [2]model.User
 	)
 	for i, addr := range []string{hs.FromAddress, hs.ToAddress} {
-		u, ok, err := d.UserByAddress(ctx, addr)
+		u, ok, err := UserByAddressOn(ctx, q, addr)
 		if err != nil {
 			return false, err
 		}
@@ -54,17 +76,9 @@ func (d *DB) CreateHandshake(ctx context.Context, hs *model.Handshake) (bool, er
 	}
 	hs.Room = users[0].Room
 
-	// Everything below runs in one transaction: the handshake insert and the
-	// automatic chat creation are atomic (single-writer pool makes the tx safe).
-	tx, err := d.BeginTx(ctx, nil)
-	if err != nil {
-		return false, err
-	}
-	defer func() { _ = tx.Rollback() }()
-
 	// Idempotent: an existing directed pair is returned as-is, no error,
 	// no balance impact.
-	existing, found, err := findHandshakeOn(ctx, tx, hs.FromAddress, hs.ToAddress)
+	existing, found, err := findHandshakeOn(ctx, q, hs.FromAddress, hs.ToAddress)
 	if err != nil {
 		return false, err
 	}
@@ -74,44 +88,43 @@ func (d *DB) CreateHandshake(ctx context.Context, hs *model.Handshake) (bool, er
 		// no live chat (or an empty one after a history clear), the next
 		// request restarts the interaction where the requester
 		// (hs.FromAddress) is the first speaker.
-		both, err := bothHandshakeDirections(ctx, tx, hs.FromAddress, hs.ToAddress)
+		both, err := bothHandshakeDirections(ctx, q, hs.FromAddress, hs.ToAddress)
 		if err != nil {
 			return false, err
 		}
 		if both {
-			chat, chatCreated, err := ensureChat(ctx, tx, hs.Room, hs.FromAddress, hs.ToAddress)
+			chat, chatCreated, err := ensureChat(ctx, q, hs.Room, hs.FromAddress, hs.ToAddress)
 			if err != nil {
 				return false, err
 			}
 			var count int64
 			if !chatCreated {
-				if err := tx.QueryRowContext(ctx,
+				if err := q.QueryRowContext(ctx,
 					`SELECT COUNT(*) FROM messages WHERE chat = ?`, chat.Address).Scan(&count); err != nil {
 					return false, err
 				}
 			}
 			if chatCreated || count == 0 {
-				if err := enqueueEvent(ctx, tx, model.EventChatInteract,
+				if err := enqueueEvent(ctx, q, model.EventChatInteract,
 					chat.Address, hs.FromAddress, hs.ToAddress); err != nil {
 					return false, err
 				}
 			}
 		}
-		if err := tx.Commit(); err != nil {
-			return false, err
-		}
 		return false, nil
 	}
 
 	// Income > outcome required to send (scoped to the interaction room).
-	balance, err := handshakeBalanceOn(ctx, tx, hs.FromAddress, hs.Room)
-	if err != nil {
-		return false, err
-	}
-	if balance <= 0 {
-		return false, errors.Join(ErrBalance, fmt.Errorf(
-			"user %q balance is %d: income must exceed outcome to send a handshake",
-			hs.FromAddress, balance))
+	if !skipBalance {
+		balance, err := handshakeBalanceOn(ctx, q, hs.FromAddress, hs.Room)
+		if err != nil {
+			return false, err
+		}
+		if balance <= 0 {
+			return false, errors.Join(ErrBalance, fmt.Errorf(
+				"user %q balance is %d: income must exceed outcome to send a handshake",
+				hs.FromAddress, balance))
+		}
 	}
 
 	hs.Value = model.HandshakeValue
@@ -121,7 +134,7 @@ func (d *DB) CreateHandshake(ctx context.Context, hs *model.Handshake) (bool, er
 	created := false
 	for attempt := 0; attempt < 3; attempt++ {
 		hs.TxID = newTxID()
-		_, err = tx.ExecContext(ctx,
+		_, err = q.ExecContext(ctx,
 			`INSERT INTO handshakes (tx_id, from_address, to_address, room, status, value, created_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 			hs.TxID, hs.FromAddress, hs.ToAddress, hs.Room, hs.Status, hs.Value, hs.CreatedAt.Format(time.RFC3339))
@@ -140,12 +153,12 @@ func (d *DB) CreateHandshake(ctx context.Context, hs *model.Handshake) (bool, er
 
 	// Chat contract: once both directions (A -> B and B -> A) exist, the chat
 	// with its participants is created automatically.
-	both, err := bothHandshakeDirections(ctx, tx, hs.FromAddress, hs.ToAddress)
+	both, err := bothHandshakeDirections(ctx, q, hs.FromAddress, hs.ToAddress)
 	if err != nil {
 		return false, err
 	}
 	if both {
-		chat, chatCreated, err := ensureChat(ctx, tx, hs.Room, hs.FromAddress, hs.ToAddress)
+		chat, chatCreated, err := ensureChat(ctx, q, hs.Room, hs.FromAddress, hs.ToAddress)
 		if err != nil {
 			return false, err
 		}
@@ -153,17 +166,29 @@ func (d *DB) CreateHandshake(ctx context.Context, hs *model.Handshake) (bool, er
 			// Kick off the agent interaction: the speaker goes first is the
 			// user who sent the first of the two handshakes (the other side
 			// of the handshake that completed the pair).
-			if err := enqueueEvent(ctx, tx, model.EventChatInteract,
+			if err := enqueueEvent(ctx, q, model.EventChatInteract,
 				chat.Address, hs.ToAddress, hs.FromAddress); err != nil {
 				return false, err
 			}
 		}
 	}
-
-	if err := tx.Commit(); err != nil {
-		return false, err
-	}
 	return created, nil
+}
+
+// UserByAddressOn is UserByAddress on the given executor so a just-opened
+// transaction sees a consistent snapshot with the caller's other reads.
+func UserByAddressOn(ctx context.Context, q rowQuerier, address string) (model.User, bool, error) {
+	row := q.QueryRowContext(ctx,
+		`SELECT address, name, room, public_bio, private_bio, greeting, language, created_at, updated_at, deleted_at
+		 FROM users WHERE address = ?`, address)
+	user, err := scanUser(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.User{}, false, nil
+	}
+	if err != nil {
+		return model.User{}, false, err
+	}
+	return user, true, nil
 }
 
 // findHandshakeOn runs the pair lookup on the given executor.

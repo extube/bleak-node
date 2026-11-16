@@ -24,7 +24,7 @@ func (f *fakeGreeter) GenerateGreeting(name, publicBio, privateBio, language str
 	return "Hello, I'm " + name + " — greetings number " + string(rune('0'+f.calls)) + "."
 }
 
-func greetingTestServer(t *testing.T) (*httptest.Server, *fakeGreeter) {
+func greetingTestServer(t *testing.T) (*httptest.Server, *db.DB, *fakeGreeter) {
 	t.Helper()
 	database, err := db.Open(context.Background(), filepath.Join(t.TempDir(), "greeting.db"))
 	if err != nil {
@@ -34,58 +34,39 @@ func greetingTestServer(t *testing.T) (*httptest.Server, *fakeGreeter) {
 	g := &fakeGreeter{}
 	ts := httptest.NewServer(New(database, g).Handler())
 	t.Cleanup(ts.Close)
-	return ts, g
+	return ts, database, g
 }
 
 func TestGreetingGeneratedOnCreation(t *testing.T) {
-	ts, greeter := greetingTestServer(t)
+	ts, database, greeter := greetingTestServer(t)
 	defer ts.Close()
 
-	// Room.
-	resp, err := http.Post(ts.URL+"/api/room", "application/json",
-		strings.NewReader(`{"name":"Greeting Room"}`))
-	if err != nil || resp.StatusCode != http.StatusCreated {
-		t.Fatalf("create room: %v %s", err, resp.Status)
-	}
-	var room struct{ Address string }
-	json.NewDecoder(resp.Body).Decode(&room)
-	resp.Body.Close()
+	// Room (creation-token gated); the first invite code comes back.
+	room, roomToken, invite := createTestRoom(t, ts, database, "Greeting Room")
 
-	// User: the greeting is generated during creation, in the room language.
-	resp, err = http.Post(ts.URL+"/api/room/"+room.Address+"/user", "application/json",
-		strings.NewReader(`{"name":"Sofia","public_bio":"calligrapher"}`))
-	if err != nil || resp.StatusCode != http.StatusCreated {
-		t.Fatalf("create user: %v %s", err, resp.Status)
-	}
-	var user struct {
-		Address  string `json:"address"`
-		Greeting string `json:"greeting"`
-	}
-	json.NewDecoder(resp.Body).Decode(&user)
-	resp.Body.Close()
-	if user.Greeting == "" || !strings.Contains(user.Greeting, "Sofia") {
-		t.Fatalf("greeting = %q, want generated hello with the name", user.Greeting)
-	}
-	if greeter.calls != 1 || greeter.language != "en" {
-		t.Fatalf("greeter calls = %d language = %q", greeter.calls, greeter.language)
-	}
+	// User (invite-code gated), carrying the client-generated persona token.
+	userAddr, userToken := joinTestRoom(t, ts, room, invite, "Sofia")
 
 	// GET greeting returns the stored text.
-	resp, err = http.Get(ts.URL + "/api/room/" + room.Address + "/user/" + user.Address + "/greeting")
+	resp, err := http.Get(ts.URL + "/api/room/" + room + "/user/" + userAddr + "/greeting")
 	if err != nil || resp.StatusCode != http.StatusOK {
 		t.Fatalf("get greeting: %v %s", err, resp.Status)
 	}
 	var gr GreetingResponse
 	json.NewDecoder(resp.Body).Decode(&gr)
 	resp.Body.Close()
-	if gr.Greeting != user.Greeting {
-		t.Fatalf("stored greeting = %q, want %q", gr.Greeting, user.Greeting)
+	if gr.Greeting == "" || !strings.Contains(gr.Greeting, "Sofia") {
+		t.Fatalf("greeting = %q, want generated hello with the name", gr.Greeting)
+	}
+	if greeter.calls != 1 || greeter.language != "en" {
+		t.Fatalf("greeter calls = %d language = %q", greeter.calls, greeter.language)
 	}
 
-	// PUT replaces it manually.
+	// PUT replaces it manually — gated: the persona token is required.
 	req, _ := http.NewRequest(http.MethodPut,
-		ts.URL+"/api/room/"+room.Address+"/user/"+user.Address+"/greeting",
+		ts.URL+"/api/room/"+room+"/user/"+userAddr+"/greeting",
 		strings.NewReader(`{"greeting":"Hello there, welcome to my corner."}`))
+	req.Header.Set("Authorization", "Bearer "+userToken)
 	resp, err = http.DefaultClient.Do(req)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		t.Fatalf("put greeting: %v %s", err, resp.Status)
@@ -95,16 +76,19 @@ func TestGreetingGeneratedOnCreation(t *testing.T) {
 	// A question in the greeting is declined: the hello exchange must not
 	// open with a question.
 	req, _ = http.NewRequest(http.MethodPut,
-		ts.URL+"/api/room/"+room.Address+"/user/"+user.Address+"/greeting",
+		ts.URL+"/api/room/"+room+"/user/"+userAddr+"/greeting",
 		strings.NewReader(`{"greeting":"Hi! How are you?"}`))
+	req.Header.Set("Authorization", "Bearer "+userToken)
 	resp, err = http.DefaultClient.Do(req)
 	if err != nil || resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("put question greeting: %v %s", err, resp.Status)
 	}
+	resp.Body.Close()
 
 	// Regenerate goes through the greeter again, still in the room language.
 	req, _ = http.NewRequest(http.MethodPost,
-		ts.URL+"/api/room/"+room.Address+"/user/"+user.Address+"/greeting/regenerate", nil)
+		ts.URL+"/api/room/"+room+"/user/"+userAddr+"/greeting/regenerate", nil)
+	req.Header.Set("Authorization", "Bearer "+userToken)
 	resp, err = http.DefaultClient.Do(req)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		t.Fatalf("regenerate: %v %s", err, resp.Status)
@@ -113,4 +97,15 @@ func TestGreetingGeneratedOnCreation(t *testing.T) {
 	if greeter.calls != 2 || greeter.language != "en" {
 		t.Fatalf("after regenerate: calls = %d language = %q", greeter.calls, greeter.language)
 	}
+
+	// The room token does not authorize persona mutations (wrong record →
+	// valid token, wrong record → 403).
+	req, _ = http.NewRequest(http.MethodPost,
+		ts.URL+"/api/room/"+room+"/user/"+userAddr+"/greeting/regenerate", nil)
+	req.Header.Set("Authorization", "Bearer "+roomToken)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil || resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("regenerate with room token: %v %s", err, resp.Status)
+	}
+	resp.Body.Close()
 }

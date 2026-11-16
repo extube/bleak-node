@@ -29,6 +29,11 @@ type User struct {
 	CreatedAt  time.Time  `json:"created_at"`
 	UpdatedAt  time.Time  `json:"updated_at"`
 	DeletedAt  *time.Time `json:"deleted_at"`
+	// MutualCodeLive reports whether a one-time mutual code is registered
+	// for the persona (derived from the stored hash, never stored itself).
+	// It is set ONLY on token-authenticated reads of the persona; public
+	// reads leave it nil.
+	MutualCodeLive *bool `json:"mutual_code_live,omitempty" example:"true"`
 }
 
 // Handshake is a directed, valued interaction between two parties within the

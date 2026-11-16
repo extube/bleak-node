@@ -56,9 +56,14 @@ func (s *Server) GetUserGreeting(w http.ResponseWriter, r *http.Request) {
 //	@Param			request	body	PutUserGreetingRequest	true	"Greeting to set"
 //	@Success		200	{object}	GreetingResponse
 //	@Failure		400	{object}	string
+//	@Failure		401	{object}	string
+//	@Failure		403	{object}	string
 //	@Failure		404	{object}	string
 //	@Router			/api/room/{room}/user/{address}/greeting [put]
 func (s *Server) PutUserGreeting(w http.ResponseWriter, r *http.Request) {
+	if !s.authUserToken(w, r, r.PathValue("room"), r.PathValue("address")) {
+		return
+	}
 	var req PutUserGreetingRequest
 	if err := decodeJSON(r, &req); err != nil {
 		respond(w, http.StatusBadRequest, message(err))
@@ -87,9 +92,14 @@ func (s *Server) PutUserGreeting(w http.ResponseWriter, r *http.Request) {
 //	@Param			room		path	string	true	"Room address"
 //	@Param			address		path	string	true	"User address"
 //	@Success		200	{object}	GreetingResponse
+//	@Failure		401	{object}	string
+//	@Failure		403	{object}	string
 //	@Failure		404	{object}	string
 //	@Router			/api/room/{room}/user/{address}/greeting/regenerate [post]
 func (s *Server) RegenerateUserGreeting(w http.ResponseWriter, r *http.Request) {
+	if !s.authUserToken(w, r, r.PathValue("room"), r.PathValue("address")) {
+		return
+	}
 	user, err := s.db.GetUser(r.Context(), r.PathValue("room"), r.PathValue("address"))
 	if err != nil {
 		s.mapError(w, err)

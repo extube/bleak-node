@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/extube/bleak-node/internal/db"
 	"github.com/swaggo/http-swagger"
@@ -16,6 +17,9 @@ import (
 type Server struct {
 	db      *db.DB
 	greeter Greeter
+	// joinLimiter rate-limits join/invite-code attempts per source (the
+	// 6-digit code space is brute-forceable; CONCEPT.md §7.4).
+	joinLimiter *rateLimiter
 }
 
 // Greeter generates a user's greeting (hello) message from their bios.
@@ -26,11 +30,22 @@ type Greeter interface {
 	GenerateGreeting(name, publicBio, privateBio, language string) string
 }
 
+// joinAttemptLimit is the per-source sliding-window limit for room-join
+// (invite-code) attempts.
+const joinAttemptLimit = 10
+
+// joinAttemptWindow is that limit's rolling window.
+const joinAttemptWindow = time.Minute
+
 // New creates a server with its routing table already registered. The
 // greeter may be nil: user creation then falls back to the plain
 // bio-based greeting.
 func New(database *db.DB, greeter Greeter) *Server {
-	return &Server{db: database, greeter: greeter}
+	return &Server{
+		db:          database,
+		greeter:     greeter,
+		joinLimiter: newRateLimiter(joinAttemptLimit, joinAttemptWindow),
+	}
 }
 
 // Handler builds and returns the HTTP handler with all routes registered.
@@ -54,9 +69,20 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/room/{room}/user/{address}/greeting", s.PutUserGreeting)
 	mux.HandleFunc("POST /api/room/{room}/user/{address}/greeting/regenerate", s.RegenerateUserGreeting)
 
+	// Ownership credentials (feature #33): token rotation, mutual codes,
+	// invite management, join-code resolution.
+	mux.HandleFunc("POST /api/room/{room}/user/{address}/token", s.RotateUserToken)
+	mux.HandleFunc("POST /api/room/{room}/user/{address}/mutual-code", s.SetMutualCode)
+	mux.HandleFunc("POST /api/room/{address}/token", s.RotateRoomToken)
+	mux.HandleFunc("POST /api/room/{address}/invite", s.CreateRoomInvite)
+	mux.HandleFunc("GET /api/room/{address}/invite", s.ListRoomInvites)
+	mux.HandleFunc("DELETE /api/room/{address}/invite/{code}", s.RevokeRoomInvite)
+	mux.HandleFunc("GET /api/invite/{code}", s.ResolveInvite)
+
 	// Handshakes.
 	mux.HandleFunc("POST /api/handshake", s.CreateHandshake)
 	mux.HandleFunc("GET /api/handshake/user/{address}", s.ListUserHandshakes)
+	mux.HandleFunc("POST /api/handshake/mutual", s.CreateMutualHandshake)
 
 	// Chats & messages.
 	mux.HandleFunc("POST /api/message", s.SendMessage)
@@ -126,6 +152,10 @@ func (s *Server) mapError(w http.ResponseWriter, err error) {
 		respond(w, http.StatusConflict, message(err))
 	case errors.Is(err, db.ErrBalance):
 		respond(w, http.StatusForbidden, message(err))
+	case errors.Is(err, db.ErrForbidden):
+		respond(w, http.StatusForbidden, message(err))
+	case errors.Is(err, db.ErrGone):
+		respond(w, http.StatusGone, message(err))
 	default:
 		respond(w, http.StatusInternalServerError, err.Error())
 	}

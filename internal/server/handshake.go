@@ -21,14 +21,16 @@ const maxAddressLen = 64
 // CreateHandshake registers a handshake between two users.
 //
 //	@Summary		create handshake
-//	@Description	Registers a handshake between two existing users with a server-generated tx id. Both users must live in the same room (the handshake is tied to it). Status must be in {1,2,3,4}; the sender's room-scoped income must exceed its outcome. A directed pair (from, to) is unique: if that handshake already exists nothing is created and the live handshake is returned with 200 instead of 201. A repeat request for a pair without a live chat (deleted) re-creates the chat.
+//	@Description	Registers a handshake between two existing users with a server-generated tx id. Requires the from persona's Bearer token. Both users must live in the same room (the handshake is tied to it). Status must be in {1,2,3,4}; the sender's room-scoped income must exceed its outcome. A directed pair (from, to) is unique: if that handshake already exists nothing is created and the live handshake is returned with 200 instead of 201. A repeat request for a pair without a live chat (deleted) re-creates the chat.
 //	@Tags			handshakes
+//	@Security		UserToken
 //	@Accept			json
 //	@Produce		json
 //	@Param			request	body	CreateHandshakeRequest	true	"Handshake to create"
 //	@Success		201	{object}	model.Handshake
 //	@Success		200	{object}	model.Handshake
 //	@Failure		400	{object}	string
+//	@Failure		401	{object}	string
 //	@Failure		403	{object}	string
 //	@Failure		404	{object}	string
 //	@Failure		409	{object}	string
@@ -56,6 +58,10 @@ func (s *Server) CreateHandshake(w http.ResponseWriter, r *http.Request) {
 		respond(w, http.StatusBadRequest, "status must be one of {1,2,3,4}")
 		return
 	}
+	// Sending a handshake AS a persona requires that persona's token.
+	if !s.authUserTokenByAddress(w, r, req.FromAddress) {
+		return
+	}
 
 	hs := model.Handshake{
 		FromAddress: req.FromAddress,
@@ -75,16 +81,23 @@ func (s *Server) CreateHandshake(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, code, hs)
 }
 
-// ListUserHandshakes returns all handshakes of a user.
+// ListUserHandshakes returns all handshakes of a user. Gated read: requires
+// that persona's token.
 //
 //	@Summary		list handshakes of a user
-//	@Description	Returns every handshake where the user is the sender or the receiver, newest first.
+//	@Description	Returns every handshake where the user is the sender or the receiver, newest first. Requires that persona's Bearer token.
 //	@Tags			handshakes
+//	@Security		UserToken
 //	@Produce		json
 //	@Param			address	path	string	true	"User address"
 //	@Success		200	{array}	model.Handshake
+//	@Failure		401	{object}	string
+//	@Failure		403	{object}	string
 //	@Router			/api/handshake/user/{address} [get]
 func (s *Server) ListUserHandshakes(w http.ResponseWriter, r *http.Request) {
+	if !s.authUserTokenByAddress(w, r, r.PathValue("address")) {
+		return
+	}
 	list, err := s.db.ListUserHandshakes(r.Context(), r.PathValue("address"))
 	if err != nil {
 		s.mapError(w, err)

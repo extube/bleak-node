@@ -9,9 +9,10 @@ import (
 	"github.com/extube/bleak-node/internal/model"
 )
 
-// CreateRoom inserts a new room with a server-generated address and
-// max_user fixed at the default (not client-settable).
-func (d *DB) CreateRoom(ctx context.Context, room *model.Room) error {
+// CreateRoom inserts a new room with a server-generated address, max_user
+// fixed at the default (not client-settable), and the hash of the
+// client-generated room token.
+func (d *DB) CreateRoom(ctx context.Context, room *model.Room, tokenHash string) error {
 	now := time.Now().UTC()
 	room.MaxUser = model.DefaultRoomMaxUsers
 	room.CreatedAt = now
@@ -21,10 +22,10 @@ func (d *DB) CreateRoom(ctx context.Context, room *model.Room) error {
 	for attempt := 0; attempt < 3; attempt++ {
 		room.Address = newAddress(16)
 		_, err := d.ExecContext(ctx,
-			`INSERT INTO rooms (address, name, description, language, max_user, created_at, updated_at, deleted_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`,
+			`INSERT INTO rooms (address, name, description, language, max_user, token_hash, created_at, updated_at, deleted_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
 			room.Address, room.Name, room.Description, room.Language, room.MaxUser,
-			room.CreatedAt.Format(time.RFC3339), room.UpdatedAt.Format(time.RFC3339),
+			tokenHash, room.CreatedAt.Format(time.RFC3339), room.UpdatedAt.Format(time.RFC3339),
 		)
 		if isUnique(err) {
 			continue
