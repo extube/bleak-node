@@ -67,7 +67,8 @@ CREATE TABLE IF NOT EXISTS rooms (
 	max_user    INTEGER NOT NULL DEFAULT 100 CHECK (max_user > 0),
 	created_at  TEXT NOT NULL,
 	updated_at  TEXT NOT NULL,
-	deleted_at  TEXT
+	deleted_at  TEXT,
+	token_hash  TEXT
 );
 
 CREATE TABLE IF NOT EXISTS users (
@@ -78,8 +79,30 @@ CREATE TABLE IF NOT EXISTS users (
 	private_bio TEXT NOT NULL DEFAULT '' CHECK (length(private_bio) <= 255),
 	created_at  TEXT NOT NULL,
 	updated_at  TEXT NOT NULL,
-	deleted_at  TEXT
+	deleted_at  TEXT,
+	token_hash        TEXT,
+	mutual_code_hash  TEXT
 );
+
+-- One-time room-creation tokens: hash primary key; used_at NULL = unused.
+-- Raw secrets are never stored (SHA-256 hex only).
+CREATE TABLE IF NOT EXISTS create_tokens (
+	hash       TEXT PRIMARY KEY,
+	created_at TEXT NOT NULL,
+	used_at    TEXT
+);
+
+-- Room join codes, 6 digits, stored PLAIN (a 10^6 space gains nothing from
+-- hashing); revoked_at NULL = active; join attempts are rate-limited upstream.
+CREATE TABLE IF NOT EXISTS room_invites (
+	code         TEXT PRIMARY KEY,
+	room_address TEXT NOT NULL REFERENCES rooms(address),
+	created_at   TEXT NOT NULL,
+	expires_at   TEXT NOT NULL,
+	revoked_at   TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_room_invites_room ON room_invites(room_address);
 
 CREATE INDEX IF NOT EXISTS idx_users_room ON users(room);
 
@@ -223,7 +246,20 @@ WHERE room = ''`); err != nil {
 	// Message content cap: rebuild legacy messages tables that deviate from
 	// the 255-symbol schema (e.g. the short-lived 511 experiment) and trim
 	// rows that no longer fit.
-	return d.rebuildMessagesWithCap(ctx)
+	if err := d.rebuildMessagesWithCap(ctx); err != nil {
+		return err
+	}
+	// Ownership tokens (feature #33): nullable credential hashes on users
+	// and rooms, plus the fresh tables are created by the schema above.
+	// These run AFTER the table rebuilds above: a rebuild recreates its
+	// table from a fixed DDL and would drop columns added before it.
+	if err := d.ensureColumn(ctx, "users", "token_hash", "TEXT"); err != nil {
+		return err
+	}
+	if err := d.ensureColumn(ctx, "users", "mutual_code_hash", "TEXT"); err != nil {
+		return err
+	}
+	return d.ensureColumn(ctx, "rooms", "token_hash", "TEXT")
 }
 
 // rebuildMessagesWithCap recreates the messages table when its content

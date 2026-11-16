@@ -96,20 +96,28 @@ end users.
 
 ## 4. API surface
 
-23 endpoints (see `docs/swagger.json` — the authoritative contract):
+30 operations over 22 paths (see `docs/swagger.json` — the authoritative
+contract):
 
 | Domain | Endpoints |
 | --- | --- |
 | Rooms | `GET/POST /api/room`, `GET/PUT/DELETE /api/room/{address}` |
 | Users | `GET/POST /api/room/{room}/user`, `GET/PUT/DELETE /api/room/{room}/user/{address}` |
 | Greetings | `GET/PUT /api/room/{room}/user/{address}/greeting`, `POST …/greeting/regenerate` |
-| Handshakes | `POST /api/handshake`, `GET /api/handshake/user/{address}` |
+| Handshakes | `POST /api/handshake`, `POST /api/handshake/mutual`, `GET /api/handshake/user/{address}` |
 | Chats | `GET /api/chat/{address}`, `GET /api/user/{address}/chat`, `GET /api/room/{room}/user/{address}/chat[/{chat}/messages]` |
-| Messages | `POST /api/message`, `GET/DELETE /api/chat/{address}/message` |
-| Kickoff | `POST /api/chat/{address}/kickoff` |
+| Messages | `POST /api/message`, `GET/DELETE /api/chat/{address}/message`, `POST /api/chat/{address}/kickoff` |
+| Credentials | `POST /api/room/{room}/user/{address}/token`, `POST /api/room/{room}/user/{address}/mutual-code`, `POST /api/room/{address}/token`, `POST/GET /api/room/{address}/invite`, `DELETE /api/room/{address}/invite/{code}`, `GET /api/invite/{code}` |
 
-Error bodies are plain text. **Authentication:** none in v1; the ownership
-token mechanism (§7.1) introduces the first scoped credentials.
+Error bodies are plain text. **Authentication:** the ownership token
+mechanism (§7.1, implemented 2026-11-16) introduces scoped credentials:
+`Authorization: Bearer <token>` on every mutation and gated read; public
+reads stay open (room lists, room user lists, public persona fields —
+`private_bio` is a gated field returned only to the persona's own token,
+together with the derived `mutual_code_live` flag). Joins require a live
+room invite code (rate-limited per source); room creation requires a
+one-time creation token in the `x-create-token` header (operator-minted via
+`tokenctl mint`).
 
 ## 5. Architecture notes
 
@@ -129,10 +137,10 @@ Backend gaps that the product needs; each is designed around by clients
 until implemented (kept in sync with the ledger in bleak-web's
 `docs/Concept.md` §1c):
 
-- [ ] **Persona ownership token mechanism** — decided (§7.1), implementation
-  pending.
-- [ ] **Native invite codes (join gate)** — decided (§7.2), implementation
-  pending; supersedes bleak-web's helper-side code→address mapping.
+- [x] **Persona ownership token mechanism** — implemented (§7.1,
+  2026-11-16).
+- [x] **Native invite codes (join gate)** — implemented (§7.2,
+  2026-11-16); supersedes bleak-web's helper-side code→address mapping.
 - [ ] **Auto-matchmaking score mechanic** — agents scan the room and rank the
   most relevant users; every user has a **score**; an incoming handshake
   raises the score; each iteration every user gains score by a personal
@@ -143,8 +151,8 @@ until implemented (kept in sync with the ledger in bleak-web's
   + emoji; feeds auto-matchmaking and richer persona cards.
 - [ ] **Private contact exchange** after a dialog — the outcome of a good
   agent conversation.
-- [ ] **Mutual-handshake-from-QR endpoint** — decided (§7.3), implementation
-  pending.
+- [x] **Mutual-handshake-from-QR endpoint** — implemented (§7.3,
+  2026-11-16).
 - [ ] **Handshake status semantics documented** — `status ∈ {1,2,3,4}`.
 - [ ] **Room-level handshake/chat listing** — for richer host/operator views.
 - [ ] **Settable `max_user` and user `language` via API** — currently
@@ -156,7 +164,7 @@ until implemented (kept in sync with the ledger in bleak-web's
 Decisions made during working sessions with the owner, in order. Each entry
 is self-contained: context, decision, and consequences.
 
-### 7.1 Persona & room ownership tokens — ✅ DECIDED (2026-11-15 session), implementation pending
+### 7.1 Persona & room ownership tokens — ✅ DECIDED (2026-11-15 session), implemented 2026-11-16
 
 **Context.** bleak-node v1 has no authentication at all. Consequences already
 accepted in v1 (owner-accepted risks, recorded in bleak-web's concept):
@@ -236,7 +244,7 @@ public reads stay open by design.
   pool is exposed; then the host UI can obtain pool tokens and the helper
   keeps only QR rendering.
 
-### 7.2 Native invite codes (join gate) — ✅ DECIDED (same session), implementation pending
+### 7.2 Native invite codes (join gate) — ✅ DECIDED (same session), implemented 2026-11-16
 
 - Joining a room requires a **temporary, currently-valid 6-digit join code**
   for that room — the invite mechanism moves **into bleak-node** (today the
@@ -250,7 +258,7 @@ public reads stay open by design.
   redundant once codes resolve natively in bleak-node; the helper keeps only
   QR PNG generation (or that moves into bleak-node too, TBD).
 
-### 7.3 Mutual-handshake-from-QR endpoint — ✅ DECIDED (2026-11-15 session), implementation pending
+### 7.3 Mutual-handshake-from-QR endpoint — ✅ DECIDED (2026-11-15 session), implemented 2026-11-16
 
 **Context.** §7.1 rule 3 makes the bleak-web v1 client routine (one phone
 sending both A→B and B→A) impossible: B→A would need B's token. Handshake by
@@ -324,6 +332,20 @@ proceed; each is a default the owner can overturn at any time:
   (6 digits = a 10⁶ space — hashing adds nothing against brute force);
   join attempts are **rate-limited** per source to blunt enumeration.
   Joining checks: code exists, not revoked, not expired.
+
+**Implementation notes (2026-11-16, WP-6).** The two amendment defaults
+flagged by bleak-web were applied as recorded:
+
+- **6.9a applied:** room-scoped per-user reads
+  (`GET /api/room/{room}/user/{address}/chat[/{chat}/messages]`) accept the
+  **room token** in addition to that persona's token — the host console
+  keeps its per-member drill-down.
+- **6.9b applied:** codes are globally unique (6-digit primary keys) and a
+  small **public resolve endpoint** `GET /api/invite/{code}` →
+  `{room}` maps a scanned code to its room (rate-limited per source).
+- One-time creation tokens are minted by the operator CLI
+  (`make tokenctl` / `bin/tokenctl mint`); the legacy migration is
+  `bin/tokenctl migrate` (raw secrets → gitignored `data/legacy-tokens.txt`).
 
 ---
 

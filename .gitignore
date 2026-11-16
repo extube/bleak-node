@@ -3,6 +3,9 @@
 /cmd/server/bleak-node
 bin/
 
+# Raw secrets of the legacy credential migration (operator-only)
+data/
+
 # SQLite databases
 *.db
 *.db-shm

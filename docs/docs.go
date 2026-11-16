@@ -20,7 +20,12 @@ const docTemplate = `{
     "paths": {
         "/api/chat/{address}": {
             "get": {
-                "description": "Returns one chat together with its participants.",
+                "security": [
+                    {
+                        "UserToken": []
+                    }
+                ],
+                "description": "Returns one chat together with its participants. Requires a participant persona's Bearer token or the room token.",
                 "produces": [
                     "application/json"
                 ],
@@ -44,6 +49,18 @@ const docTemplate = `{
                             "$ref": "#/definitions/server.ChatResponse"
                         }
                     },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
                     "404": {
                         "description": "Not Found",
                         "schema": {
@@ -55,7 +72,12 @@ const docTemplate = `{
         },
         "/api/chat/{address}/kickoff": {
             "post": {
-                "description": "Clears the message history of the chat and returns the interaction to the queue. The speaker of the first turn is the user who sent the pair's earliest handshake; the agents then continue automatically until the chat limit.",
+                "security": [
+                    {
+                        "UserToken": []
+                    }
+                ],
+                "description": "Clears the message history of the chat and returns the interaction to the queue. The speaker of the first turn is the user who sent the pair's earliest handshake; the agents then continue automatically until the chat limit. Requires a participant persona's Bearer token or the room token.",
                 "produces": [
                     "application/json"
                 ],
@@ -79,6 +101,18 @@ const docTemplate = `{
                             "$ref": "#/definitions/server.KickoffResponse"
                         }
                     },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
                     "404": {
                         "description": "Not Found",
                         "schema": {
@@ -90,7 +124,12 @@ const docTemplate = `{
         },
         "/api/chat/{address}/message": {
             "get": {
-                "description": "Returns every message in the chat, oldest first.",
+                "security": [
+                    {
+                        "UserToken": []
+                    }
+                ],
+                "description": "Returns every message in the chat, oldest first. Requires a participant persona's Bearer token or the room token.",
                 "produces": [
                     "application/json"
                 ],
@@ -117,6 +156,18 @@ const docTemplate = `{
                             }
                         }
                     },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
                     "404": {
                         "description": "Not Found",
                         "schema": {
@@ -126,7 +177,12 @@ const docTemplate = `{
                 }
             },
             "delete": {
-                "description": "Deletes every message of the chat. The chat and its participants remain.",
+                "security": [
+                    {
+                        "UserToken": []
+                    }
+                ],
+                "description": "Deletes every message of the chat. The chat and its participants remain. Requires a participant persona's Bearer token or the room token.",
                 "produces": [
                     "application/json"
                 ],
@@ -150,6 +206,18 @@ const docTemplate = `{
                             "$ref": "#/definitions/server.ClearChatResponse"
                         }
                     },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
                     "404": {
                         "description": "Not Found",
                         "schema": {
@@ -161,7 +229,12 @@ const docTemplate = `{
         },
         "/api/handshake": {
             "post": {
-                "description": "Registers a handshake between two existing users with a server-generated tx id. Both users must live in the same room (the handshake is tied to it). Status must be in {1,2,3,4}; the sender's room-scoped income must exceed its outcome. A directed pair (from, to) is unique: if that handshake already exists nothing is created and the live handshake is returned with 200 instead of 201. A repeat request for a pair without a live chat (deleted) re-creates the chat.",
+                "security": [
+                    {
+                        "UserToken": []
+                    }
+                ],
+                "description": "Registers a handshake between two existing users with a server-generated tx id. Requires the from persona's Bearer token. Both users must live in the same room (the handshake is tied to it). Status must be in {1,2,3,4}; the sender's room-scoped income must exceed its outcome. A directed pair (from, to) is unique: if that handshake already exists nothing is created and the live handshake is returned with 200 instead of 201. A repeat request for a pair without a live chat (deleted) re-creates the chat.",
                 "consumes": [
                     "application/json"
                 ],
@@ -202,6 +275,12 @@ const docTemplate = `{
                             "type": "string"
                         }
                     },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
@@ -223,9 +302,95 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/handshake/mutual": {
+            "post": {
+                "security": [
+                    {
+                        "UserToken": []
+                    }
+                ],
+                "description": "Verifies the scanned one-time mutual code against the target persona's stored hash; on a match the code is CONSUMED (burned) and both directed handshakes (scanner -\u003e target and target -\u003e scanner) are created idempotently, auto-creating the pair chat when new. One chat per pair: an already-mutual pair still burns the code but never creates a second chat. The room's income\u003eoutcome rule applies to the caller's own direction; a rejected attempt does NOT consume the code. Requires the SCANNER persona's Bearer token.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "handshakes"
+                ],
+                "summary": "mutual handshake from QR scan",
+                "parameters": [
+                    {
+                        "description": "Scanned persona address and the raw one-time mutual code",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.CreateMutualHandshakeRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.MutualHandshakeResponse"
+                        }
+                    },
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/server.MutualHandshakeResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "410": {
+                        "description": "Gone",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/api/handshake/user/{address}": {
             "get": {
-                "description": "Returns every handshake where the user is the sender or the receiver, newest first.",
+                "security": [
+                    {
+                        "UserToken": []
+                    }
+                ],
+                "description": "Returns every handshake where the user is the sender or the receiver, newest first. Requires that persona's Bearer token.",
                 "produces": [
                     "application/json"
                 ],
@@ -251,13 +416,71 @@ const docTemplate = `{
                                 "$ref": "#/definitions/model.Handshake"
                             }
                         }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/invite/{code}": {
+            "get": {
+                "description": "Resolves a currently-valid 6-digit invite code to its room address. Public read, rate-limited per source.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "credentials"
+                ],
+                "summary": "resolve an invite code",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Invite code",
+                        "name": "code",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.ResolveInviteResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "type": "string"
+                        }
                     }
                 }
             }
         },
         "/api/message": {
             "post": {
-                "description": "Posts a message from one user to another inside their chat. The chat must exist: it is created automatically once handshakes exist in both directions (A -\u003e B and B -\u003e A) between the two users. Content is limited to 255 symbols, the tx id and created_at are generated by the server.",
+                "security": [
+                    {
+                        "UserToken": []
+                    }
+                ],
+                "description": "Posts a message from one user to another inside their chat. Requires the from persona's Bearer token. The chat must exist: it is created automatically once handshakes exist in both directions (A -\u003e B and B -\u003e A) between the two users. Content is limited to 255 symbols, the tx id and created_at are generated by the server.",
                 "consumes": [
                     "application/json"
                 ],
@@ -288,6 +511,18 @@ const docTemplate = `{
                     },
                     "400": {
                         "description": "Bad Request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
                         "schema": {
                             "type": "string"
                         }
@@ -330,7 +565,7 @@ const docTemplate = `{
                 }
             },
             "post": {
-                "description": "Creates a room with a server-generated unique address.",
+                "description": "Creates a room with a server-generated unique address. Requires a one-time creation token in the x-create-token header (consumed on use) and the client-generated room token in the body (only its SHA-256 hash is stored). The first invite code (24 h expiry) is minted at creation and returned.",
                 "consumes": [
                     "application/json"
                 ],
@@ -343,7 +578,14 @@ const docTemplate = `{
                 "summary": "create room",
                 "parameters": [
                     {
-                        "description": "Room to create",
+                        "type": "string",
+                        "description": "One-time room-creation token",
+                        "name": "x-create-token",
+                        "in": "header",
+                        "required": true
+                    },
+                    {
+                        "description": "Room to create (with the client-generated room token)",
                         "name": "request",
                         "in": "body",
                         "required": true,
@@ -356,11 +598,23 @@ const docTemplate = `{
                     "201": {
                         "description": "Created",
                         "schema": {
-                            "$ref": "#/definitions/model.Room"
+                            "$ref": "#/definitions/server.CreateRoomResponse"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
                         "schema": {
                             "type": "string"
                         }
@@ -451,6 +705,18 @@ const docTemplate = `{
                             "type": "string"
                         }
                     },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
                     "404": {
                         "description": "Not Found",
                         "schema": {
@@ -460,6 +726,11 @@ const docTemplate = `{
                 }
             },
             "delete": {
+                "security": [
+                    {
+                        "RoomToken": []
+                    }
+                ],
                 "description": "Soft-deletes a room together with its linked users.",
                 "tags": [
                     "rooms"
@@ -481,6 +752,266 @@ const docTemplate = `{
                             "$ref": "#/definitions/model.Room"
                         }
                     },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/room/{address}/invite": {
+            "get": {
+                "security": [
+                    {
+                        "RoomToken": []
+                    }
+                ],
+                "description": "Returns the not-yet-revoked, unexpired invite codes of the room. Requires the room token as Bearer.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "credentials"
+                ],
+                "summary": "list active invite codes",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Room address",
+                        "name": "address",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.InviteListResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "security": [
+                    {
+                        "RoomToken": []
+                    }
+                ],
+                "description": "Mints a fresh 6-digit join code for the room. Multi-use until expiry (default 24 h, settable via expires_at); several codes may be active per room; revocation is immediate. Requires the room token as Bearer.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "credentials"
+                ],
+                "summary": "mint a room invite code",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Room address",
+                        "name": "address",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Optional expiry",
+                        "name": "request",
+                        "in": "body",
+                        "schema": {
+                            "$ref": "#/definitions/server.CreateInviteRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/server.InviteResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/room/{address}/invite/{code}": {
+            "delete": {
+                "security": [
+                    {
+                        "RoomToken": []
+                    }
+                ],
+                "description": "Revokes the invite code of the room immediately. Requires the room token as Bearer.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "credentials"
+                ],
+                "summary": "revoke an invite code",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Room address",
+                        "name": "address",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Invite code",
+                        "name": "code",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.MutualCodeResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/room/{address}/token": {
+            "post": {
+                "security": [
+                    {
+                        "RoomToken": []
+                    }
+                ],
+                "description": "Stores the hash of the NEW client-generated room token; the old token is invalid afterwards. Requires the CURRENT room token as Bearer.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "credentials"
+                ],
+                "summary": "rotate room token",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Room address",
+                        "name": "address",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "New raw token",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.RotateTokenRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.MutualCodeResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
                     "404": {
                         "description": "Not Found",
                         "schema": {
@@ -492,7 +1023,7 @@ const docTemplate = `{
         },
         "/api/room/{room}/user": {
             "get": {
-                "description": "Returns all non-deleted users linked to the room.",
+                "description": "Returns all non-deleted users linked to the room. Public read: private_bio is a gated field and is blanked in list responses.",
                 "produces": [
                     "application/json"
                 ],
@@ -522,7 +1053,7 @@ const docTemplate = `{
                 }
             },
             "post": {
-                "description": "Creates a user linked to the room. The room must exist and not be deleted.",
+                "description": "Creates a user linked to the room. The room must exist and not be deleted. Joining requires a currently-valid, unrevoked, unexpired invite_code of the room (attempts are rate-limited per source) and the client-generated persona token in the body (only its SHA-256 hash is stored).",
                 "consumes": [
                     "application/json"
                 ],
@@ -542,7 +1073,7 @@ const docTemplate = `{
                         "required": true
                     },
                     {
-                        "description": "User to create",
+                        "description": "User to create (with invite code and persona token)",
                         "name": "request",
                         "in": "body",
                         "required": true,
@@ -564,6 +1095,12 @@ const docTemplate = `{
                             "type": "string"
                         }
                     },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
                     "404": {
                         "description": "Not Found",
                         "schema": {
@@ -575,13 +1112,19 @@ const docTemplate = `{
                         "schema": {
                             "type": "string"
                         }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "type": "string"
+                        }
                     }
                 }
             }
         },
         "/api/room/{room}/user/{address}": {
             "get": {
-                "description": "Returns a non-deleted user linked to the room.",
+                "description": "Returns a non-deleted user linked to the room. Public read: private_bio (and the derived mutual_code_live flag) are returned ONLY when the request presents that persona's Bearer token.",
                 "produces": [
                     "application/json"
                 ],
@@ -670,6 +1213,18 @@ const docTemplate = `{
                             "type": "string"
                         }
                     },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
                     "404": {
                         "description": "Not Found",
                         "schema": {
@@ -679,6 +1234,11 @@ const docTemplate = `{
                 }
             },
             "delete": {
+                "security": [
+                    {
+                        "UserToken": []
+                    }
+                ],
                 "description": "Soft-deletes a user of the room.",
                 "tags": [
                     "users"
@@ -707,6 +1267,18 @@ const docTemplate = `{
                             "$ref": "#/definitions/model.User"
                         }
                     },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
                     "404": {
                         "description": "Not Found",
                         "schema": {
@@ -718,7 +1290,12 @@ const docTemplate = `{
         },
         "/api/room/{room}/user/{address}/chat": {
             "get": {
-                "description": "Returns every chat the user participates in. The user must live in the given room.",
+                "security": [
+                    {
+                        "UserToken": []
+                    }
+                ],
+                "description": "Returns every chat the user participates in. The user must live in the given room. Requires that persona's Bearer token or the room token.",
                 "produces": [
                     "application/json"
                 ],
@@ -752,6 +1329,18 @@ const docTemplate = `{
                             }
                         }
                     },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
                     "404": {
                         "description": "Not Found",
                         "schema": {
@@ -763,7 +1352,12 @@ const docTemplate = `{
         },
         "/api/room/{room}/user/{address}/chat/{chat}/messages": {
             "get": {
-                "description": "Returns every message of the chat, oldest first. The user must live in the given room and participate in the chat.",
+                "security": [
+                    {
+                        "UserToken": []
+                    }
+                ],
+                "description": "Returns every message of the chat, oldest first. The user must live in the given room and participate in the chat. Requires that persona's Bearer token or the room token.",
                 "produces": [
                     "application/json"
                 ],
@@ -802,6 +1396,18 @@ const docTemplate = `{
                             "items": {
                                 "$ref": "#/definitions/model.Message"
                             }
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "string"
                         }
                     },
                     "404": {
@@ -904,6 +1510,18 @@ const docTemplate = `{
                             "type": "string"
                         }
                     },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
                     "404": {
                         "description": "Not Found",
                         "schema": {
@@ -946,6 +1564,172 @@ const docTemplate = `{
                             "$ref": "#/definitions/server.GreetingResponse"
                         }
                     },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/room/{room}/user/{address}/mutual-code": {
+            "post": {
+                "security": [
+                    {
+                        "UserToken": []
+                    }
+                ],
+                "description": "Stores the SHA-256 hash of a fresh one-time mutual code for the persona; storing the hash makes the code live. Requires that persona's Bearer token.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "credentials"
+                ],
+                "summary": "register a one-time mutual code",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Room address",
+                        "name": "room",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "User address",
+                        "name": "address",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Hash of the new one-time code",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.SetMutualCodeRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.MutualCodeResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/room/{room}/user/{address}/token": {
+            "post": {
+                "security": [
+                    {
+                        "UserToken": []
+                    }
+                ],
+                "description": "Stores the hash of the NEW client-generated persona token; the old token is invalid afterwards. Requires the CURRENT persona token as Bearer.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "credentials"
+                ],
+                "summary": "rotate persona token",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Room address",
+                        "name": "room",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "User address",
+                        "name": "address",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "New raw token",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.RotateTokenRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.MutualCodeResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
                     "404": {
                         "description": "Not Found",
                         "schema": {
@@ -957,7 +1741,12 @@ const docTemplate = `{
         },
         "/api/user/{address}/chat": {
             "get": {
-                "description": "Returns every chat the user participates in, newest first.",
+                "security": [
+                    {
+                        "UserToken": []
+                    }
+                ],
+                "description": "Returns every chat the user participates in, newest first. Requires that persona's Bearer token.",
                 "produces": [
                     "application/json"
                 ],
@@ -983,12 +1772,55 @@ const docTemplate = `{
                                 "$ref": "#/definitions/server.ChatResponse"
                             }
                         }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "string"
+                        }
                     }
                 }
             }
         }
     },
     "definitions": {
+        "model.Chat": {
+            "type": "object",
+            "properties": {
+                "address": {
+                    "type": "string",
+                    "example": "0xchat123"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "language": {
+                    "type": "string",
+                    "example": "en"
+                },
+                "phase": {
+                    "type": "string",
+                    "example": "networking"
+                },
+                "phase_started_at": {
+                    "type": "string"
+                },
+                "room": {
+                    "type": "string",
+                    "example": "0xroom123"
+                },
+                "scenario": {
+                    "type": "string",
+                    "example": "ai-future"
+                }
+            }
+        },
         "model.Handshake": {
             "type": "object",
             "properties": {
@@ -1117,6 +1949,11 @@ const docTemplate = `{
                     "type": "string",
                     "example": "en"
                 },
+                "mutual_code_live": {
+                    "description": "MutualCodeLive reports whether a one-time mutual code is registered\nfor the persona (derived from the stored hash, never stored itself).\nIt is set ONLY on token-authenticated reads of the persona; public\nreads leave it nil.",
+                    "type": "boolean",
+                    "example": true
+                },
                 "name": {
                     "type": "string",
                     "example": "Alice"
@@ -1200,6 +2037,25 @@ const docTemplate = `{
                 }
             }
         },
+        "server.CreateInviteRequest": {
+            "type": "object",
+            "properties": {
+                "expires_at": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.CreateMutualHandshakeRequest": {
+            "type": "object",
+            "properties": {
+                "mutual_code": {
+                    "type": "string"
+                },
+                "user_address": {
+                    "type": "string"
+                }
+            }
+        },
         "server.CreateRoomRequest": {
             "type": "object",
             "properties": {
@@ -1211,12 +2067,56 @@ const docTemplate = `{
                 },
                 "name": {
                     "type": "string"
+                },
+                "token": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.CreateRoomResponse": {
+            "type": "object",
+            "properties": {
+                "address": {
+                    "type": "string",
+                    "example": "0xroom123"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "deleted_at": {
+                    "type": "string"
+                },
+                "description": {
+                    "type": "string",
+                    "example": "A room for bleak meetings"
+                },
+                "invite_code": {
+                    "type": "string",
+                    "example": "482913"
+                },
+                "language": {
+                    "type": "string",
+                    "example": "en"
+                },
+                "max_user": {
+                    "type": "integer",
+                    "example": 100
+                },
+                "name": {
+                    "type": "string",
+                    "example": "Meta Room"
+                },
+                "updated_at": {
+                    "type": "string"
                 }
             }
         },
         "server.CreateUserRequest": {
             "type": "object",
             "properties": {
+                "invite_code": {
+                    "type": "string"
+                },
                 "name": {
                     "type": "string"
                 },
@@ -1224,6 +2124,9 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "public_bio": {
+                    "type": "string"
+                },
+                "token": {
                     "type": "string"
                 }
             }
@@ -1235,6 +2138,34 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "greeting": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.InviteListResponse": {
+            "type": "object",
+            "properties": {
+                "invites": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.InviteResponse"
+                    }
+                }
+            }
+        },
+        "server.InviteResponse": {
+            "type": "object",
+            "properties": {
+                "code": {
+                    "type": "string"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "expires_at": {
+                    "type": "string"
+                },
+                "room": {
                     "type": "string"
                 }
             }
@@ -1253,10 +2184,52 @@ const docTemplate = `{
                 }
             }
         },
+        "server.MutualCodeResponse": {
+            "type": "object",
+            "properties": {
+                "address": {
+                    "type": "string"
+                },
+                "mutual_code_live": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "server.MutualHandshakeResponse": {
+            "type": "object",
+            "properties": {
+                "chat": {
+                    "$ref": "#/definitions/model.Chat"
+                },
+                "handshakes": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.Handshake"
+                    }
+                }
+            }
+        },
         "server.PutUserGreetingRequest": {
             "type": "object",
             "properties": {
                 "greeting": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.ResolveInviteResponse": {
+            "type": "object",
+            "properties": {
+                "room": {
+                    "type": "string",
+                    "example": "0xroom123"
+                }
+            }
+        },
+        "server.RotateTokenRequest": {
+            "type": "object",
+            "properties": {
+                "token": {
                     "type": "string"
                 }
             }
@@ -1271,6 +2244,14 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "to": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.SetMutualCodeRequest": {
+            "type": "object",
+            "properties": {
+                "mutual_code_hash": {
                     "type": "string"
                 }
             }
