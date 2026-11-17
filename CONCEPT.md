@@ -146,9 +146,11 @@ until implemented (kept in sync with the ledger in bleak-web's
   raises the score; each iteration every user gains score by a personal
   coefficient (derived from matched hobbies / hobby groups / topics); when a
   user reaches threshold **N**, their agent automatically sends a handshake.
-  Requires the interests field first.
-- [ ] **Interests field on the user profile** — array of short hobby labels
-  + emoji; feeds auto-matchmaking and richer persona cards.
+  Requires the interests field first (now present, §7.4).
+- [x] **Interests on the user profile + matching score** — implemented
+  (§7.4, feature #34, 2026-11-17): the `interests` table
+  (user_address, title, group, key), bulk add/delete under the persona's
+  token and the matching-score endpoint `POST /api/match`.
 - [ ] **Private contact exchange** after a dialog — the outcome of a good
   agent conversation.
 - [x] **Mutual-handshake-from-QR endpoint** — implemented (§7.3,
@@ -346,6 +348,44 @@ flagged by bleak-web were applied as recorded:
 - One-time creation tokens are minted by the operator CLI
   (`make tokenctl` / `bin/tokenctl mint`); the legacy migration is
   `bin/tokenctl migrate` (raw secrets → gitignored `data/legacy-tokens.txt`).
+
+### 7.4 Interests + matching score — ✅ DECIDED (owner directive, 2026-11-17), implemented (feature #34)
+
+**Context.** The product needs a graded affinity between two personas of
+one room: how well they match right now, driven by shared interests and
+their handshake state (the auto-matchmaking mechanic consumes it).
+
+**Decisions.**
+
+- **Storage.** New `interests` table: `user_address` (FK users), `title`
+  (1..64 symbols), `group INTEGER` (the interest category) and
+  `key INTEGER` (the concrete interest). `(user_address, key)` is the
+  primary key: a persona holds one interest per key; re-adding an existing
+  key replaces its title/group.
+- **Bulk add** `POST /api/room/{room}/user/{address}/interest` — body
+  `{"interests": [{"title", "group", "key"}]}` (1..50 rows), persona-token
+  gated, room-scoped; responds 201 with the full resulting list.
+- **Bulk delete** `DELETE /api/room/{room}/user/{address}/interest` — body
+  `{"keys": [...]}` (1..50 keys, unknown keys ignored = idempotent);
+  persona-token gated; responds 200 with the remaining list.
+- **Matching score** `POST /api/match` — body
+  `{"room_address", "first_user_address", "second_user_address", "time"}`
+  where `time` is milliseconds (the formula's t is its hours, float);
+  requires the FIRST persona's Bearer token; both users must live in the
+  room. Response:
+  `{"points", "mutual_handshake", "handshake", "exact_interest_matches",
+  "shared_groups"}`.
+- **Formula** (owner-specified base): `points =
+  clamp(50 + 50·(1/2^t) + coef, 0, 100)` with t = hours (float) from the
+  entered milliseconds. Coefficients (owner note, quantified at
+  implementation): a one-sided handshake in the room +4; every shared
+  interest group +2; every exact interest match (same group AND same key)
+  +5. A **mutual handshake returns 100 immediately** (both directed
+  handshakes exist between the two in the room), whatever the time and
+  interests say; everything is clamped into [0, 100].
+- The coefficient values (+4 / +2 / +5) are initial constants
+  (`internal/db/interest.go`, `CoefHandshake` / `CoefSameGroup` /
+  `CoefSameKey`) and may be retuned without contract changes.
 
 ---
 

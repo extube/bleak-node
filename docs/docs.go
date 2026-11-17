@@ -473,6 +473,69 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/match": {
+            "post": {
+                "security": [
+                    {
+                        "UserToken": []
+                    }
+                ],
+                "description": "Computes the matching points (0..100) of two personas inside one room: points = clamp(50 + 50 * (1 / 2^t) + coef, 0, 100) with t the hours (float) converted from the requested time (milliseconds). The coefficient adds +4 for a one-sided handshake between the two (one direction exists in the room), +2 per shared interest group and +5 per exact interest match (same group AND same key). A mutual handshake (both directions exist) returns 100 immediately. Requires the FIRST persona's Bearer token; both users must live in the room.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "matching"
+                ],
+                "summary": "matching score of two users",
+                "parameters": [
+                    {
+                        "description": "Match request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.MatchRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/db.MatchResult"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/api/message": {
             "post": {
                 "security": [
@@ -1585,6 +1648,164 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/room/{room}/user/{address}/interest": {
+            "post": {
+                "security": [
+                    {
+                        "UserToken": []
+                    }
+                ],
+                "description": "Upserts many interests for a non-deleted user inside the room. Requires that persona's Bearer token. Each interest carries a title (1..64 symbols), a numeric group (the category) and a numeric key (the concrete interest); the key is unique per user, so re-adding an existing key replaces the title/group. The list holds 1..50 rows. Responds 201 with the user's full resulting list.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "interests"
+                ],
+                "summary": "add interests of a user",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Room address",
+                        "name": "room",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "User address",
+                        "name": "address",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Interests to add",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.AddInterestsRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/model.Interest"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "UserToken": []
+                    }
+                ],
+                "description": "Deletes the interests with the given keys of a non-deleted user inside the room. Requires that persona's Bearer token. The list holds 1..50 keys; unknown keys are ignored (idempotent delete). Responds 200 with the user's remaining interests.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "interests"
+                ],
+                "summary": "delete interests of a user",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Room address",
+                        "name": "room",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "User address",
+                        "name": "address",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Interest keys to delete",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.DeleteInterestsRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/model.Interest"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/api/room/{room}/user/{address}/mutual-code": {
             "post": {
                 "security": [
@@ -1790,6 +2011,31 @@ const docTemplate = `{
         }
     },
     "definitions": {
+        "db.MatchResult": {
+            "type": "object",
+            "properties": {
+                "exact_interest_matches": {
+                    "description": "ExactMatches is the number of exact interest matches (same group\nand same key on both sides).",
+                    "type": "integer"
+                },
+                "handshake": {
+                    "description": "Handshake reports that at least one directed handshake exists.",
+                    "type": "boolean"
+                },
+                "mutual_handshake": {
+                    "description": "MutualHandshake reports that both directed handshakes exist (the\ninstant-100 case).",
+                    "type": "boolean"
+                },
+                "points": {
+                    "description": "Points is the final score, always within [0, 100].",
+                    "type": "number"
+                },
+                "shared_groups": {
+                    "description": "SharedGroups is the number of interest groups present on both sides.",
+                    "type": "integer"
+                }
+            }
+        },
         "model.Chat": {
             "type": "object",
             "properties": {
@@ -1850,6 +2096,27 @@ const docTemplate = `{
                 "value": {
                     "type": "integer",
                     "example": 1
+                }
+            }
+        },
+        "model.Interest": {
+            "type": "object",
+            "properties": {
+                "group": {
+                    "type": "integer",
+                    "example": 1
+                },
+                "key": {
+                    "type": "integer",
+                    "example": 7
+                },
+                "title": {
+                    "type": "string",
+                    "example": "Chess"
+                },
+                "user_address": {
+                    "type": "string",
+                    "example": "0xuser123"
                 }
             }
         },
@@ -1972,6 +2239,17 @@ const docTemplate = `{
                 },
                 "updated_at": {
                     "type": "string"
+                }
+            }
+        },
+        "server.AddInterestsRequest": {
+            "type": "object",
+            "properties": {
+                "interests": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.InterestInput"
+                    }
                 }
             }
         },
@@ -2131,6 +2409,22 @@ const docTemplate = `{
                 }
             }
         },
+        "server.DeleteInterestsRequest": {
+            "type": "object",
+            "properties": {
+                "keys": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    },
+                    "example": [
+                        1,
+                        2,
+                        3
+                    ]
+                }
+            }
+        },
         "server.GreetingResponse": {
             "type": "object",
             "properties": {
@@ -2139,6 +2433,23 @@ const docTemplate = `{
                 },
                 "greeting": {
                     "type": "string"
+                }
+            }
+        },
+        "server.InterestInput": {
+            "type": "object",
+            "properties": {
+                "group": {
+                    "type": "integer",
+                    "example": 1
+                },
+                "key": {
+                    "type": "integer",
+                    "example": 7
+                },
+                "title": {
+                    "type": "string",
+                    "example": "Chess"
                 }
             }
         },
@@ -2181,6 +2492,28 @@ const docTemplate = `{
                 },
                 "speaker": {
                     "type": "string"
+                }
+            }
+        },
+        "server.MatchRequest": {
+            "type": "object",
+            "properties": {
+                "first_user_address": {
+                    "type": "string",
+                    "example": "0xuser123"
+                },
+                "room_address": {
+                    "type": "string",
+                    "example": "0xroom123"
+                },
+                "second_user_address": {
+                    "type": "string",
+                    "example": "0xuser456"
+                },
+                "time": {
+                    "description": "Time is the formula's time in milliseconds; converted to the hours t\nof 50 + 50 * (1 / 2^t).",
+                    "type": "number",
+                    "example": 3600000
                 }
             }
         },

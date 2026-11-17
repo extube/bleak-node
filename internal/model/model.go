@@ -48,6 +48,18 @@ type Handshake struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 
+// Interest is one declared interest of a user: a short title classified by
+// a numeric group (the interest category) and a numeric key (the concrete
+// interest inside that category). Keys are unique per user: re-adding an
+// existing key replaces the title/group. Interests feed the matching score
+// (POST /api/match).
+type Interest struct {
+	UserAddress string `json:"user_address" example:"0xuser123"`
+	Title       string `json:"title" example:"Chess"`
+	Group       int    `json:"group" example:"1"`
+	Key         int    `json:"key" example:"7"`
+}
+
 // Chat links two users who share messages. Created automatically once
 // handshakes exist in both directions (A -> B and B -> A). Chats live in
 // the same room as their participants. Every chat carries a scenario key
@@ -102,6 +114,10 @@ type Event struct {
 const (
 	// MaxMessageContentLen is the maximum number of symbols in message content.
 	MaxMessageContentLen = 255
+	// MaxInterestTitleLen is the maximum number of symbols in an interest title.
+	MaxInterestTitleLen = 64
+	// MaxInterestsPerRequest bounds the bulk add/delete payload size.
+	MaxInterestsPerRequest = 50
 )
 
 // Queue event types.

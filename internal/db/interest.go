@@ -1,0 +1,323 @@
+// User interests and the matching score between two personas (feature #34).
+//
+// A persona declares a list of interests: each carries a title classified
+// by a numeric group (the category) and a numeric key (the concrete
+// interest). The matching score grades two users of one room on
+// [0, 100]: the time-decayed base plus an interest/handshake coefficient;
+// a mutual handshake is an instant 100.
+package db
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"math"
+	"strings"
+	"time"
+	"unicode/utf8"
+
+	"github.com/extube/bleak-node/internal/model"
+)
+
+// Matching-score coefficients (feature #34). The final points are
+//
+//	points = clamp(50 + 50 * (1 / 2^t) + coef, 0, 100)
+//
+// with t the hours (float) computed from the requested time (milliseconds)
+// and coef assembled from the relations between the two personas:
+//
+//   - a one-sided handshake (one direction exists in the room): +4;
+//   - every shared interest group: +2;
+//   - every exact interest match (same group AND same key): +5.
+//
+// A mutual handshake (both directions) returns 100 immediately, whatever
+// the time and interests say.
+const (
+	CoefHandshake = 4
+	CoefSameGroup = 2
+	CoefSameKey   = 5
+)
+
+// millisPerHour converts the requested milliseconds into the formula's t.
+const millisPerHour = float64(time.Hour / time.Millisecond)
+
+// MatchResult is the response of the matching-score computation.
+type MatchResult struct {
+	// Points is the final score, always within [0, 100].
+	Points float64 `json:"points"`
+	// MutualHandshake reports that both directed handshakes exist (the
+	// instant-100 case).
+	MutualHandshake bool `json:"mutual_handshake"`
+	// Handshake reports that at least one directed handshake exists.
+	Handshake bool `json:"handshake"`
+	// ExactMatches is the number of exact interest matches (same group
+	// and same key on both sides).
+	ExactMatches int `json:"exact_interest_matches"`
+	// SharedGroups is the number of interest groups present on both sides.
+	SharedGroups int `json:"shared_groups"`
+}
+
+// validateInterest checks one client-supplied interest row.
+func validateInterest(in model.Interest) error {
+	if n := utf8.RuneCountInString(in.Title); n == 0 || n > model.MaxInterestTitleLen {
+		return errors.Join(ErrInvalid, fmt.Errorf(
+			"interest title must be 1..%d symbols (got %d)", model.MaxInterestTitleLen, n))
+	}
+	if in.Group < 0 {
+		return errors.Join(ErrInvalid, fmt.Errorf("interest group must be >= 0 (got %d)", in.Group))
+	}
+	if in.Key < 0 {
+		return errors.Join(ErrInvalid, fmt.Errorf("interest key must be >= 0 (got %d)", in.Key))
+	}
+	return nil
+}
+
+// userInRoomOn reports whether a non-deleted user lives in the room, on
+// the given executor.
+func (d *DB) userInRoomOn(ctx context.Context, q rowQuerier, room, address string) (bool, error) {
+	return d.existsOn(ctx, q,
+		`SELECT EXISTS (SELECT 1 FROM users WHERE address = ? AND room = ? AND deleted_at IS NULL)`,
+		address, room)
+}
+
+// AddUserInterests upserts the interests of a non-deleted user inside the
+// given room (each key is unique per user; re-adding a key replaces the
+// title/group) and returns the user's full resulting list. An empty list
+// is ErrInvalid.
+func (d *DB) AddUserInterests(ctx context.Context, roomAddress, address string, list []model.Interest) ([]model.Interest, error) {
+	if len(list) == 0 {
+		return nil, errors.Join(ErrInvalid, errors.New("interests list is empty"))
+	}
+	for _, in := range list {
+		if err := validateInterest(in); err != nil {
+			return nil, err
+		}
+	}
+
+	tx, err := d.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if ok, err := d.userInRoomOn(ctx, tx, roomAddress, address); err != nil {
+		return nil, err
+	} else if !ok {
+		return nil, errors.Join(ErrNotFound,
+			fmt.Errorf("user %q not found in room %q", address, roomAddress))
+	}
+
+	for _, in := range list {
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO interests (user_address, title, "group", "key")
+			VALUES (?, ?, ?, ?)
+			ON CONFLICT (user_address, "key")
+			DO UPDATE SET title = excluded.title, "group" = excluded."group"`,
+			address, in.Title, in.Group, in.Key); err != nil {
+			return nil, err
+		}
+	}
+	res, err := listInterestsOn(ctx, tx, address)
+	if err != nil {
+		return nil, err
+	}
+	return res, tx.Commit()
+}
+
+// DeleteUserInterests removes the interests with the given keys of a
+// non-deleted user inside the given room and returns the remaining list.
+// Unknown keys are not an error (the delete is idempotent); the int result
+// reports how many rows were removed.
+func (d *DB) DeleteUserInterests(ctx context.Context, roomAddress, address string, keys []int) (int, []model.Interest, error) {
+	if len(keys) == 0 {
+		return 0, nil, errors.Join(ErrInvalid, errors.New("keys list is empty"))
+	}
+
+	tx, err := d.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if ok, err := d.userInRoomOn(ctx, tx, roomAddress, address); err != nil {
+		return 0, nil, err
+	} else if !ok {
+		return 0, nil, errors.Join(ErrNotFound,
+			fmt.Errorf("user %q not found in room %q", address, roomAddress))
+	}
+
+	// DELETE ... IN with per-key placeholders (the list is bounded by the
+	// request cap, so the dynamic placeholder count stays small).
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(keys)), ",")
+	args := make([]any, 0, len(keys)+1)
+	args = append(args, address)
+	for _, k := range keys {
+		args = append(args, k)
+	}
+	res, err := tx.ExecContext(ctx,
+		fmt.Sprintf(`DELETE FROM interests WHERE user_address = ? AND "key" IN (%s)`, placeholders),
+		args...)
+	if err != nil {
+		return 0, nil, err
+	}
+	removed, err := res.RowsAffected()
+	if err != nil {
+		return 0, nil, err
+	}
+	remaining, err := listInterestsOn(ctx, tx, address)
+	if err != nil {
+		return 0, nil, err
+	}
+	return int(removed), remaining, tx.Commit()
+}
+
+// ListUserInterests returns all interests of a non-deleted user inside the
+// given room, ordered by group, then key.
+func (d *DB) ListUserInterests(ctx context.Context, roomAddress, address string) ([]model.Interest, error) {
+	if ok, err := d.userInRoomOn(ctx, d, roomAddress, address); err != nil {
+		return nil, err
+	} else if !ok {
+		return nil, errors.Join(ErrNotFound,
+			fmt.Errorf("user %q not found in room %q", address, roomAddress))
+	}
+	return listInterestsOn(ctx, d, address)
+}
+
+func listInterestsOn(ctx context.Context, q listQuerier, address string) ([]model.Interest, error) {
+	rows, err := q.QueryContext(ctx,
+		`SELECT user_address, title, "group", "key" FROM interests
+		 WHERE user_address = ?
+		 ORDER BY "group" ASC, "key" ASC`, address)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []model.Interest{}
+	for rows.Next() {
+		var in model.Interest
+		if err := rows.Scan(&in.UserAddress, &in.Title, &in.Group, &in.Key); err != nil {
+			return nil, err
+		}
+		out = append(out, in)
+	}
+	return out, rows.Err()
+}
+
+// existsOn is exists on the given executor.
+func (d *DB) existsOn(ctx context.Context, q rowQuerier, query string, args ...any) (bool, error) {
+	var one bool
+	if err := q.QueryRowContext(ctx, query, args...).Scan(&one); err != nil {
+		return false, err
+	}
+	return one, nil
+}
+
+// listQuerier is the QueryContext subset of *sql.DB / *sql.Tx used by the
+// interest list helper.
+type listQuerier interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+// MatchPoints computes the matching score of two personas inside one room.
+// Both users must live in the room (ErrNotFound otherwise); timeMs is the
+// formula's time in milliseconds (ErrInvalid when negative or when the two
+// addresses coincide). The score:
+//
+//	points = clamp(50 + 50 * (1 / 2^t) + coef, 0, 100),  t = timeMs hours
+//
+// where coef adds CoefHandshake per one-sided handshake, CoefSameGroup per
+// shared interest group and CoefSameKey per exact interest match. A mutual
+// handshake (both directions exist in the room) returns 100 immediately.
+func (d *DB) MatchPoints(ctx context.Context, roomAddress, first, second string, timeMs float64) (MatchResult, error) {
+	var res MatchResult
+	if timeMs < 0 {
+		return res, errors.Join(ErrInvalid, errors.New("time must be >= 0"))
+	}
+	if first == second {
+		return res, errors.Join(ErrInvalid, errors.New("first_user_address and second_user_address must differ"))
+	}
+
+	// One consistent snapshot: handshakes, interests and users are read on
+	// the same implicit transaction window (single-writer SQLite keeps the
+	// writes serialized; a read tx guarantees a coherent view).
+	tx, err := d.BeginTx(ctx, nil)
+	if err != nil {
+		return res, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	for _, addr := range []string{first, second} {
+		ok, err := d.userInRoomOn(ctx, tx, roomAddress, addr)
+		if err != nil {
+			return res, err
+		}
+		if !ok {
+			return res, errors.Join(ErrNotFound,
+				fmt.Errorf("user %q not found in room %q", addr, roomAddress))
+		}
+	}
+
+	// Handshake state between the two personas within the room.
+	var directions int
+	if err := tx.QueryRowContext(ctx, `
+		SELECT (SELECT EXISTS (SELECT 1 FROM handshakes
+			WHERE room = ? AND from_address = ? AND to_address = ?)) +
+		       (SELECT EXISTS (SELECT 1 FROM handshakes
+			WHERE room = ? AND from_address = ? AND to_address = ?))`,
+		roomAddress, first, second,
+		roomAddress, second, first).Scan(&directions); err != nil {
+		return res, err
+	}
+	res.Handshake = directions > 0
+	res.MutualHandshake = directions == 2
+	if res.MutualHandshake {
+		// Mutual handshake: instant full score, nothing else weighs in.
+		res.Points = 100
+		return res, tx.Commit()
+	}
+
+	// Interests of both personas: exact matches (same group AND key) and
+	// shared groups (the group appears on both sides).
+	interestsA, err := listInterestsOn(ctx, tx, first)
+	if err != nil {
+		return res, err
+	}
+	interestsB, err := listInterestsOn(ctx, tx, second)
+	if err != nil {
+		return res, err
+	}
+	byKeyA := make(map[int]model.Interest, len(interestsA))
+	groupsA := make(map[int]struct{}, len(interestsA))
+	for _, in := range interestsA {
+		byKeyA[in.Key] = in
+		groupsA[in.Group] = struct{}{}
+	}
+	groupsB := make(map[int]struct{}, len(interestsB))
+	for _, in := range interestsB {
+		groupsB[in.Group] = struct{}{}
+		if a, ok := byKeyA[in.Key]; ok && a.Group == in.Group {
+			res.ExactMatches++
+		}
+	}
+	for g := range groupsA {
+		if _, ok := groupsB[g]; ok {
+			res.SharedGroups++
+		}
+	}
+
+	coef := 0
+	if res.Handshake {
+		coef += CoefHandshake
+	}
+	coef += CoefSameGroup * res.SharedGroups
+	coef += CoefSameKey * res.ExactMatches
+
+	t := timeMs / millisPerHour
+	res.Points = 50 + 50*math.Pow(0.5, t) + float64(coef)
+	// Clamp into [0, 100]; round to 2 decimals so clients see clean numbers.
+	res.Points = math.Max(0, math.Min(100, res.Points))
+	res.Points = math.Round(res.Points*100) / 100
+	return res, tx.Commit()
+}

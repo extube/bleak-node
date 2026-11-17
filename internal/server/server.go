@@ -69,6 +69,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/room/{room}/user/{address}/greeting", s.PutUserGreeting)
 	mux.HandleFunc("POST /api/room/{room}/user/{address}/greeting/regenerate", s.RegenerateUserGreeting)
 
+	// Interests & matching score (feature #34): bulk add/delete of a
+	// persona's interests, matching score between two personas.
+	mux.HandleFunc("POST /api/room/{room}/user/{address}/interest", s.AddUserInterests)
+	mux.HandleFunc("DELETE /api/room/{room}/user/{address}/interest", s.DeleteUserInterests)
+	mux.HandleFunc("POST /api/match", s.MatchPoints)
+
 	// Ownership credentials (feature #33): token rotation, mutual codes,
 	// invite management, join-code resolution.
 	mux.HandleFunc("POST /api/room/{room}/user/{address}/token", s.RotateUserToken)

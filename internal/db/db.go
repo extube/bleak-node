@@ -106,6 +106,20 @@ CREATE INDEX IF NOT EXISTS idx_room_invites_room ON room_invites(room_address);
 
 CREATE INDEX IF NOT EXISTS idx_users_room ON users(room);
 
+-- Personas declare their interests: a title classified by a numeric group
+-- (the category) and a numeric key (the concrete interest). One row per
+-- (user, key): re-adding an existing key upserts the title/group. The
+-- matching score (POST /api/match) reads them.
+CREATE TABLE IF NOT EXISTS interests (
+	user_address TEXT NOT NULL REFERENCES users(address),
+	title        TEXT NOT NULL CHECK (length(title) <= 64),
+	"group"      INTEGER NOT NULL,
+	"key"        INTEGER NOT NULL,
+	PRIMARY KEY (user_address, "key")
+);
+
+CREATE INDEX IF NOT EXISTS idx_interests_user ON interests(user_address);
+
 -- from_address may be a room (system "welcome" handshake), so foreign keys
 -- are intentionally not declared here; the application validates addresses.
 CREATE TABLE IF NOT EXISTS handshakes (
