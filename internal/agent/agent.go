@@ -230,11 +230,13 @@ type turnGroup struct {
 // turnResult collects everything ONE processed event changes. It all
 // commits in ONE transaction (db.CompleteTurn): message bubbles, an
 // optional phase stamp, an optional next-turn event and the completion of
-// the event itself.
+// the event itself. done stamps the chat as finished: the farewell turn
+// sets it, nothing else does.
 type turnResult struct {
 	groups []turnGroup
 	phase  *db.TurnPhase
 	next   *db.TurnNext
+	done   bool
 }
 
 // commitTurn applies the turn atomically and logs the saved bubbles group
@@ -247,7 +249,7 @@ func (w *Worker) commitTurn(ctx context.Context, ev model.Event, names map[strin
 	for i, g := range r.groups {
 		bubbles[i] = g.bubble
 	}
-	saved, err := w.db.CompleteTurn(ctx, ev.ID, bubbles, r.phase, r.next)
+	saved, err := w.db.CompleteTurn(ctx, ev.ID, bubbles, r.phase, r.next, r.done)
 	if err != nil {
 		return err
 	}
@@ -327,7 +329,7 @@ func (w *Worker) process(ctx context.Context, ev model.Event) error {
 		// Unknown type: nothing to change, just complete the event (its own
 		// one-transaction commit keeps it out of the queue forever).
 		w.log.Warn("agent worker ignores unknown event type", "type", ev.Type, "id", ev.ID)
-		_, err := w.db.CompleteTurn(ctx, ev.ID, nil, nil, nil)
+		_, err := w.db.CompleteTurn(ctx, ev.ID, nil, nil, nil, false)
 		return err
 	}
 
@@ -559,7 +561,7 @@ func (w *Worker) process(ctx context.Context, ev model.Event) error {
 	case overLimit:
 		// Reply goodbye: a pattern message of the listener, generated
 		// locally without the LLM and without the transcript. The chat ends
-		// here: no further event is queued.
+		// here: no further event is queued and the chat is stamped done.
 		return w.commitTurn(ctx, ev, names, turnResult{
 			groups: []turnGroup{
 				{label: "1/1", bubble: db.TurnBubble{
@@ -570,6 +572,7 @@ func (w *Worker) process(ctx context.Context, ev model.Event) error {
 					Contents: []string{goodbyeReply(chat.Language)},
 				}},
 			},
+			done: true,
 		})
 	}
 

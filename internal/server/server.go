@@ -17,6 +17,9 @@ import (
 type Server struct {
 	db      *db.DB
 	greeter Greeter
+	// summarizer powers the hard match (feature #35); nil keeps the
+	// deterministic heuristic fallback.
+	summarizer ChatSummarizer
 	// joinLimiter rate-limits join/invite-code attempts per source (the
 	// 6-digit code space is brute-forceable; CONCEPT.md §7.4).
 	joinLimiter *rateLimiter
@@ -48,6 +51,66 @@ func New(database *db.DB, greeter Greeter) *Server {
 	}
 }
 
+// WithSummarizer wires the hard-match chat summarizer (feature #35).
+// Without it the hard match falls back to the deterministic heuristic
+// grading.
+func (s *Server) WithSummarizer(summarizer ChatSummarizer) *Server {
+	s.summarizer = summarizer
+	return s
+}
+
+// MatchPointsV2 computes the time-independent matching score of two
+// personas: the same pair always grades to the same points, which stay
+// strictly inside (0, 100) - 0 and 100 are impossible.
+//
+//	@Summary		time-independent matching score of two users
+//	@Description	Computes the matching points of two personas inside one room WITHOUT any time input: points = 50 + 50 * tanh(coef / 12), where the coefficient adds +4 per handshake direction (a mutual pair counts both directions - there is no instant 100), +2 per shared interest group and +5 per exact interest match (same group AND same key). The score is always strictly inside (0, 100): 0 and 100 are impossible, and the same pair always grades to the same value. Difficulty calibration: a FULL match (> 80) is rare - a mutual handshake alone stays below the line (79.14) and only pairs with real shared interests cross it, so roughly one of five random pairs reaches the zone. Requires the FIRST persona's Bearer token; both users must live in the room.
+//	@Tags			matching
+//	@Security		UserToken
+//	@Accept			json
+//	@Produce		json
+//	@Param			request	body	MatchV2Request	true	"Match request"
+//	@Success		200	{object}	db.MatchResult
+//	@Failure		400	{object}	string
+//	@Failure		401	{object}	string
+//	@Failure		403	{object}	string
+//	@Failure		404	{object}	string
+//	@Router			/api/match/v2 [post]
+func (s *Server) MatchPointsV2(w http.ResponseWriter, r *http.Request) {
+	var req MatchV2Request
+	if err := decodeJSON(r, &req); err != nil {
+		respond(w, http.StatusBadRequest, message(err))
+		return
+	}
+	if err := validateAddressArgs(req.RoomAddress, req.FirstUserAddress, req.SecondUserAddress); err != nil {
+		respond(w, http.StatusBadRequest, message(err))
+		return
+	}
+	if req.FirstUserAddress == req.SecondUserAddress {
+		respond(w, http.StatusBadRequest, "first_user_address and second_user_address must differ")
+		return
+	}
+	if !s.authUserToken(w, r, req.RoomAddress, req.FirstUserAddress) {
+		return
+	}
+
+	res, err := s.db.MatchPointsV2(r.Context(),
+		req.RoomAddress, req.FirstUserAddress, req.SecondUserAddress)
+	if err != nil {
+		s.mapError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// MatchV2Request is the body for POST /api/match/v2. Unlike the legacy
+// match it carries no time: the formula is time-independent.
+type MatchV2Request struct {
+	RoomAddress       string `json:"room_address" example:"0xroom123"`
+	FirstUserAddress  string `json:"first_user_address" example:"0xuser123"`
+	SecondUserAddress string `json:"second_user_address" example:"0xuser456"`
+}
+
 // Handler builds and returns the HTTP handler with all routes registered.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -74,6 +137,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/room/{room}/user/{address}/interest", s.AddUserInterests)
 	mux.HandleFunc("DELETE /api/room/{room}/user/{address}/interest", s.DeleteUserInterests)
 	mux.HandleFunc("POST /api/match", s.MatchPoints)
+	// Hard matching (feature #35): the time-independent score and the
+	// once-only summarized match of a user pair.
+	mux.HandleFunc("POST /api/match/v2", s.MatchPointsV2)
+	mux.HandleFunc("POST /api/hard-match", s.HardMatch)
+
+	// Shared contacts (feature #35): one share per pair, recipient-only
+	// reads.
+	mux.HandleFunc("POST /api/contact", s.ShareContact)
+	mux.HandleFunc("GET /api/contact/{address}", s.ListContacts)
 
 	// Ownership credentials (feature #33): token rotation, mutual codes,
 	// invite management, join-code resolution.

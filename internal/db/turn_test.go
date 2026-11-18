@@ -76,7 +76,7 @@ func TestCompleteTurnCommitsEverything(t *testing.T) {
 			{From: "0xa", To: "0xb", Contents: []string{"Hello there!", "Nice to meet you."}},
 		},
 		&TurnPhase{Phase: "networking", StartedAt: time.Now()},
-		&TurnNext{Speaker: "0xb", Listener: "0xa"})
+		&TurnNext{Speaker: "0xb", Listener: "0xa"}, false)
 	if err != nil {
 		t.Fatalf("complete turn: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestCompleteTurnRejectsWrongLanguageAtomically(t *testing.T) {
 	// processing (retryable), transcript untouched.
 	_, err := d.CompleteTurn(context.Background(), ev.ID,
 		[]TurnBubble{{From: "0xa", To: "0xb", Contents: []string{"Hello!", "Привет, это по-русски."}}},
-		nil, &TurnNext{Speaker: "0xb", Listener: "0xa"})
+		nil, &TurnNext{Speaker: "0xb", Listener: "0xa"}, false)
 	if err == nil {
 		t.Fatal("wrong-language turn accepted")
 	}

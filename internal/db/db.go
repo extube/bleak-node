@@ -141,6 +141,7 @@ CREATE TABLE IF NOT EXISTS chats (
 	language         TEXT NOT NULL DEFAULT 'en',
 	phase            TEXT NOT NULL DEFAULT '',
 	phase_started_at TEXT NOT NULL DEFAULT '',
+	done             INTEGER NOT NULL DEFAULT 0,
 	created_at       TEXT NOT NULL
 );
 
@@ -181,6 +182,35 @@ CREATE TABLE IF NOT EXISTS events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_status ON events(status, id);
+
+-- Hard matching (feature #35): one summarized result per user pair. The
+-- chat is the primary key (a pair holds exactly one chat) and the
+-- canonical (user_a < user_b) pair index drives the once-only lookup.
+CREATE TABLE IF NOT EXISTS summaries (
+	chat        TEXT PRIMARY KEY REFERENCES chats(address),
+	room        TEXT NOT NULL DEFAULT '',
+	user_a      TEXT NOT NULL REFERENCES users(address),
+	user_b      TEXT NOT NULL REFERENCES users(address),
+	score       REAL NOT NULL CHECK (score > 0 AND score < 100),
+	checklist   TEXT NOT NULL DEFAULT '' CHECK (length(checklist) <= 255),
+	description TEXT NOT NULL DEFAULT '' CHECK (length(description) <= 1000),
+	created_at  TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_summaries_pair ON summaries(user_a, user_b);
+
+-- Shared contacts (feature #35): the (from, to) pair is the unique key, so
+-- one persona shares its contact details with a given user only once; only
+-- the recipient reads the record.
+CREATE TABLE IF NOT EXISTS contacts (
+	"from"     TEXT NOT NULL REFERENCES users(address),
+	"to"       TEXT NOT NULL REFERENCES users(address),
+	content    TEXT NOT NULL CHECK (length(content) <= 255),
+	created_at TEXT NOT NULL,
+	PRIMARY KEY ("from", "to")
+);
+
+CREATE INDEX IF NOT EXISTS idx_contacts_to ON contacts("to");
 `
 	if _, err := d.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("migrate: %w", err)
@@ -230,6 +260,11 @@ CREATE INDEX IF NOT EXISTS idx_events_status ON events(status, id);
 		return err
 	}
 	if err := d.ensureColumn(ctx, "chats", "phase_started_at", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	// Chat completion marker (feature #35): the farewell turn stamps it;
+	// a kickoff clears it. Older rows default to 0 (not done).
+	if err := d.ensureColumn(ctx, "chats", "done", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
 	if _, err := d.ExecContext(ctx, `

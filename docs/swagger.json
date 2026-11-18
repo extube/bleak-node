@@ -220,6 +220,136 @@
                 }
             }
         },
+        "/api/contact": {
+            "post": {
+                "security": [
+                    {
+                        "UserToken": []
+                    }
+                ],
+                "description": "Shares contact details from one persona to another inside the network. Requires the FROM persona's Bearer token; both users must exist and differ. The (from, to) pair is unique: a persona can share its contacts with a given user only once - a repeated share answers 409. Content is required and limited to 255 symbols.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "contacts"
+                ],
+                "summary": "share contacts",
+                "parameters": [
+                    {
+                        "description": "Contact to share",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.ShareContactRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/model.Contact"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/contact/{address}": {
+            "get": {
+                "security": [
+                    {
+                        "UserToken": []
+                    }
+                ],
+                "description": "Returns every contact shared with the given persona, newest first. ONLY the recipient has access to the records: requires that persona's Bearer token.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "contacts"
+                ],
+                "summary": "list contacts of a user",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "User address (the recipient)",
+                        "name": "address",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/model.Contact"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/api/handshake": {
             "post": {
                 "security": [
@@ -425,6 +555,75 @@
                 }
             }
         },
+        "/api/hard-match": {
+            "post": {
+                "security": [
+                    {
+                        "UserToken": []
+                    }
+                ],
+                "description": "Summarizes the chat of the pair, grades the networking checklist (both introduced themselves, found a shared topic, balanced turns, questions answered, warm farewell), merges the checkpoint result with the time-independent match score (POST /api/match/v2) and stores one Summary per pair. The method activates only once: a repeated call for a pair that already has a summary returns the stored record without re-summarizing. Handshakes impact NO value: the method is only reachable for pairs with a mutual handshake anyway (the chat requires both directions), so the soft score entering the merge is driven by shared interests alone. The merged score stays strictly inside (0, 100) and a full match (\u003e 80) is rare: hard = 50 + 50 * tanh((closed - 3) / 2) keeps an average 3/5 chat at the neutral 50 and a perfect 5/5 conversation at 88.08, so the merged score only crosses 80 when the interest-driven soft score is strong as well. Requires the FIRST persona's Bearer token; both users must live in the room and their chat must exist.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "matching"
+                ],
+                "summary": "hard match of two users",
+                "parameters": [
+                    {
+                        "description": "Hard match request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.HardMatchRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/model.Summary"
+                        }
+                    },
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/model.Summary"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/api/invite/{code}": {
             "get": {
                 "description": "Resolves a currently-valid 6-digit invite code to its room address. Public read, rate-limited per source.",
@@ -492,6 +691,69 @@
                         "required": true,
                         "schema": {
                             "$ref": "#/definitions/server.MatchRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/db.MatchResult"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/match/v2": {
+            "post": {
+                "security": [
+                    {
+                        "UserToken": []
+                    }
+                ],
+                "description": "Computes the matching points of two personas inside one room WITHOUT any time input: points = 50 + 50 * tanh(coef / 12), where the coefficient adds +4 per handshake direction (a mutual pair counts both directions - there is no instant 100), +2 per shared interest group and +5 per exact interest match (same group AND same key). The score is always strictly inside (0, 100): 0 and 100 are impossible, and the same pair always grades to the same value. Difficulty calibration: a FULL match (\u003e 80) is rare - a mutual handshake alone stays below the line (79.14) and only pairs with real shared interests cross it, so roughly one of five random pairs reaches the zone. Requires the FIRST persona's Bearer token; both users must live in the room.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "matching"
+                ],
+                "summary": "time-independent matching score of two users",
+                "parameters": [
+                    {
+                        "description": "Match request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.MatchV2Request"
                         }
                     }
                 ],
@@ -2039,6 +2301,11 @@
                 "created_at": {
                     "type": "string"
                 },
+                "done": {
+                    "description": "Done reports that the conversation reached its final goodbye: the\nfarewell turn stamps it automatically; a kickoff resets it to false.",
+                    "type": "boolean",
+                    "example": false
+                },
                 "language": {
                     "type": "string",
                     "example": "en"
@@ -2057,6 +2324,43 @@
                 "scenario": {
                     "type": "string",
                     "example": "ai-future"
+                }
+            }
+        },
+        "model.Checkpoint": {
+            "type": "object",
+            "properties": {
+                "closed": {
+                    "type": "boolean",
+                    "example": true
+                },
+                "key": {
+                    "type": "string",
+                    "example": "introductions"
+                },
+                "label": {
+                    "type": "string",
+                    "example": "Both introduced themselves"
+                }
+            }
+        },
+        "model.Contact": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "example": "telegram: @alice_paints"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "from": {
+                    "type": "string",
+                    "example": "0xuser123"
+                },
+                "to": {
+                    "type": "string",
+                    "example": "0xuser456"
                 }
             }
         },
@@ -2188,6 +2492,46 @@
                 }
             }
         },
+        "model.Summary": {
+            "type": "object",
+            "properties": {
+                "chat": {
+                    "type": "string",
+                    "example": "0xchat123"
+                },
+                "checkpoints": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.Checkpoint"
+                    }
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "description": {
+                    "description": "Description is the chat summarization produced by the hard match.",
+                    "type": "string",
+                    "example": "Alice and Bob introduced themselves, found a shared love of watercolor and closed with a warm goodbye."
+                },
+                "room": {
+                    "type": "string",
+                    "example": "0xroom123"
+                },
+                "score": {
+                    "description": "Score is the merged hard-match score, strictly inside (0, 100).",
+                    "type": "number",
+                    "example": 66.4
+                },
+                "user_a": {
+                    "type": "string",
+                    "example": "0xuser123"
+                },
+                "user_b": {
+                    "type": "string",
+                    "example": "0xuser456"
+                }
+            }
+        },
         "model.User": {
             "type": "object",
             "properties": {
@@ -2255,6 +2599,11 @@
                 },
                 "created_at": {
                     "type": "string"
+                },
+                "done": {
+                    "description": "Done reports that the conversation reached its final goodbye: the\nfarewell turn stamps it automatically; a kickoff resets it to false.",
+                    "type": "boolean",
+                    "example": false
                 },
                 "language": {
                     "type": "string",
@@ -2429,6 +2778,23 @@
                 }
             }
         },
+        "server.HardMatchRequest": {
+            "type": "object",
+            "properties": {
+                "first_user_address": {
+                    "type": "string",
+                    "example": "0xuser123"
+                },
+                "room_address": {
+                    "type": "string",
+                    "example": "0xroom123"
+                },
+                "second_user_address": {
+                    "type": "string",
+                    "example": "0xuser456"
+                }
+            }
+        },
         "server.InterestInput": {
             "type": "object",
             "properties": {
@@ -2510,6 +2876,23 @@
                 }
             }
         },
+        "server.MatchV2Request": {
+            "type": "object",
+            "properties": {
+                "first_user_address": {
+                    "type": "string",
+                    "example": "0xuser123"
+                },
+                "room_address": {
+                    "type": "string",
+                    "example": "0xroom123"
+                },
+                "second_user_address": {
+                    "type": "string",
+                    "example": "0xuser456"
+                }
+            }
+        },
         "server.MutualCodeResponse": {
             "type": "object",
             "properties": {
@@ -2579,6 +2962,24 @@
             "properties": {
                 "mutual_code_hash": {
                     "type": "string"
+                }
+            }
+        },
+        "server.ShareContactRequest": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "description": "Content is the contact detail itself (a messenger handle, an email,\na phone line, ...).",
+                    "type": "string",
+                    "example": "telegram: @alice_paints"
+                },
+                "from": {
+                    "type": "string",
+                    "example": "0xuser123"
+                },
+                "to": {
+                    "type": "string",
+                    "example": "0xuser456"
                 }
             }
         },

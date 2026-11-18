@@ -59,18 +59,22 @@ func main() {
 	defer database.Close()
 
 	// The greeter generates user greetings (hello messages) on user
-	// creation and regeneration; it shares the worker's LLM settings.
-	greeter := agent.NewGreeter(agent.NewClient(
+	// creation and regeneration; the summarizer grades pair chats for the
+	// hard match. Both share the worker's LLM settings and fall back to
+	// deterministic templates when the gateway is unreachable.
+	llm := agent.NewClient(
 		envOr("BLEAK_NODE_LLM_URL", "http://localhost:8000/v1"),
 		envOr("BLEAK_NODE_LLM_MODEL", "gemma-4-e2b-agent"),
 		envOr("BLEAK_NODE_LLM_API_KEY", envOr("OPENROUTER_API_KEY", "")),
 		30*time.Second,
 		envBool("BLEAK_NODE_LLM_THINKING", false),
-	))
+	)
+	greeter := agent.NewGreeter(llm)
+	summarizer := agent.NewSummarizer(llm)
 
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           server.New(database, greeter).Handler(),
+		Handler:           server.New(database, greeter).WithSummarizer(summarizer).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

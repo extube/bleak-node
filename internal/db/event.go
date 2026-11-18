@@ -134,13 +134,15 @@ type TurnNext struct {
 // CompleteTurn applies everything ONE processed event changes in ONE
 // transaction: the turn's message bubbles (each group from its own author,
 // every bubble validated against the room language), an optional chat phase
-// stamp, an optional next-turn event, and the completion of the processed
-// event itself (an empty bubbles list just completes the event - used for
-// unknown event types). Either all of it commits or none: a crash or reload
-// before the commit leaves the event reclaimable and the transcript
-// untouched, so the retry regenerates the turn cleanly - no duplicated
-// bubbles, no lost hand-off to the other agent, no broken dialog chain.
-func (d *DB) CompleteTurn(ctx context.Context, eventID int64, bubbles []TurnBubble, phase *TurnPhase, next *TurnNext) ([]model.Message, error) {
+// stamp, an optional next-turn event, an optional chat-done stamp, and the
+// completion of the processed event itself (an empty bubbles list just
+// completes the event - used for unknown event types). Either all of it
+// commits or none: a crash or reload before the commit leaves the event
+// reclaimable and the transcript untouched, so the retry regenerates the
+// turn cleanly - no duplicated bubbles, no lost hand-off to the other
+// agent, no broken dialog chain. The done stamp marks the final farewell
+// turn: the conversation is over and no further turn follows.
+func (d *DB) CompleteTurn(ctx context.Context, eventID int64, bubbles []TurnBubble, phase *TurnPhase, next *TurnNext, done bool) ([]model.Message, error) {
 	tx, err := d.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -223,6 +225,12 @@ func (d *DB) CompleteTurn(ctx context.Context, eventID int64, bubbles []TurnBubb
 			return nil, err
 		}
 	}
+	if done {
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE chats SET done = 1 WHERE address = ?`, chat.Address); err != nil {
+			return nil, err
+		}
+	}
 	if next != nil {
 		if err := enqueueEvent(ctx, tx, model.EventChatInteract, chat.Address, next.Speaker, next.Listener); err != nil {
 			return nil, err
@@ -271,7 +279,8 @@ SELECT c.address,
        (SELECT m.created_at FROM messages m WHERE m.chat = c.address ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1)
 FROM chats c
 JOIN participants p ON p.chat = c.address
-WHERE EXISTS (SELECT 1 FROM messages WHERE chat = c.address)
+WHERE c.done = 0
+  AND EXISTS (SELECT 1 FROM messages WHERE chat = c.address)
   AND NOT EXISTS (SELECT 1 FROM events WHERE chat = c.address AND status IN (?, ?))
 GROUP BY c.address
 HAVING (SELECT m.created_at FROM messages m WHERE m.chat = c.address ORDER BY m.created_at DESC, m.rowid DESC LIMIT 1) <= ?`,

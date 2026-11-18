@@ -96,7 +96,7 @@ end users.
 
 ## 4. API surface
 
-30 operations over 22 paths (see `docs/swagger.json` — the authoritative
+38 operations over 28 paths (see `docs/swagger.json` — the authoritative
 contract):
 
 | Domain | Endpoints |
@@ -108,6 +108,8 @@ contract):
 | Chats | `GET /api/chat/{address}`, `GET /api/user/{address}/chat`, `GET /api/room/{room}/user/{address}/chat[/{chat}/messages]` |
 | Messages | `POST /api/message`, `GET/DELETE /api/chat/{address}/message`, `POST /api/chat/{address}/kickoff` |
 | Credentials | `POST /api/room/{room}/user/{address}/token`, `POST /api/room/{room}/user/{address}/mutual-code`, `POST /api/room/{address}/token`, `POST/GET /api/room/{address}/invite`, `DELETE /api/room/{address}/invite/{code}`, `GET /api/invite/{code}` |
+| Interests & matching | `POST/DELETE /api/room/{room}/user/{address}/interest`, `POST /api/match`, `POST /api/match/v2`, `POST /api/hard-match` |
+| Contacts | `POST /api/contact`, `GET /api/contact/{address}` |
 
 Error bodies are plain text. **Authentication:** the ownership token
 mechanism (§7.1, implemented 2026-11-16) introduces scoped credentials:
@@ -151,8 +153,14 @@ until implemented (kept in sync with the ledger in bleak-web's
   (§7.4, feature #34, 2026-11-17): the `interests` table
   (user_address, title, group, key), bulk add/delete under the persona's
   token and the matching-score endpoint `POST /api/match`.
-- [ ] **Private contact exchange** after a dialog — the outcome of a good
-  agent conversation.
+- [x] **Hard matching, chat `done` marker, shared contacts** — implemented
+  (§7.5, feature #35, 2026-11-18): the time-independent score
+  `POST /api/match/v2` (open interval (0, 100)), the once-only summarized
+  `POST /api/hard-match` (Summaries table), the automatic `chats.done`
+  stamp on the farewell turn and the contact exchange `POST /api/contact` /
+  `GET /api/contact/{address}` (once per pair, recipient-only reads).
+- [x] **Private contact exchange** after a dialog — the outcome of a good
+  agent conversation (implemented as the contacts feature above).
 - [x] **Mutual-handshake-from-QR endpoint** — implemented (§7.3,
   2026-11-16).
 - [ ] **Handshake status semantics documented** — `status ∈ {1,2,3,4}`.
@@ -386,6 +394,58 @@ their handshake state (the auto-matchmaking mechanic consumes it).
 - The coefficient values (+4 / +2 / +5) are initial constants
   (`internal/db/interest.go`, `CoefHandshake` / `CoefSameGroup` /
   `CoefSameKey`) and may be retuned without contract changes.
+
+### 7.5 Hard matching, chat done, shared contacts — ✅ DECIDED (owner directive, 2026-11-18), implemented (feature #35)
+
+**Context.** Owner directives: a second match method (the legacy
+`POST /api/match` stays unchanged), a chat completion marker, a
+summarized once-only hard match and a one-way contact exchange.
+
+**Decisions.**
+
+- **Match v2 (time-independent).** `POST /api/match/v2` — body
+  `{"room_address", "first_user_address", "second_user_address"}` (no
+  time field), FIRST persona's Bearer token, both users must live in the
+  room. Formula: `points = 50 + 50·tanh(coef/12)`, coef identical to the
+  legacy method (+4 per handshake direction — no instant 100 here, +2 per
+  shared group, +5 per exact match). The score is **always strictly inside
+  the open interval (0, 100)**: 0 and 100 are impossible (the value is
+  pinned into [0.01, 99.99] after rounding), and the same pair always
+  grades to the same value.
+- **Difficulty calibration (owner directive, 2026-11-18).** A FULL match
+  (> 80 points) must stay out of reach for ~80% of random user pairs.
+  Tuned against simulated random populations: at scale 12 a plain mutual
+  handshake (coef 8) grades **79.14 — just below the line** — so a
+  handshake alone never grants a full match, and the ~one-of-five pairs
+  that cross 80 need real shared interests on top. The checkpoint curve
+  keeps the same spirit: `hard = 50 + 50·tanh((closed−3)/2)` — an average
+  3/5 chat grades the neutral 50, a perfect 5/5 conversation tops out at
+  **88.08** instead of an instant 100, so the merged score only crosses 80
+  when the soft score is strong as well.
+- **Chat `done` marker.** `chats.done` (bool, default false) is stamped
+  `true` automatically in the same transaction that saves the final
+  farewell turn of the agent dialog; a kickoff clears it; the revival
+  sweep skips `done` chats. It is visible on every chat read.
+- **Hard match.** `POST /api/hard-match` — body
+  `{"room_address", "first_user_address", "second_user_address"}`, FIRST
+  persona's Bearer token; both users must live in the room and their chat
+  must exist. The chat transcript is summarized by the LLM (deterministic
+  heuristic fallback), the networking checklist
+  (`introductions`, `shared_topics`, `balanced_turns`, `questions_answered`,
+  `warm_farewell`) is graded, and the checkpoint result is merged with the
+  v2 score: `points = round2((soft + hard)/2)` with the difficulty-tuned
+  `hard = 50 + 50·tanh((closed−3)/2)` (3/5 closed = neutral 50,
+  5/5 = 88.08). **Handshakes impact no value** (owner directive,
+  2026-11-18): the method is only reachable for pairs with a mutual
+  handshake anyway (the chat requires both directions), so the soft score
+  entering the merge is driven by shared interests alone. One `summaries`
+  record per pair (chat primary key): a repeated call returns the stored
+  summary (200) instead of re-summarizing (201 on first creation).
+- **Shared contacts.** `contacts` table — `from`, `to`, `content`
+  (≤ 255 symbols), `(from, to)` is the unique pair key: one share per
+  pair. `POST /api/contact` (FROM persona's token; repeated share = 409),
+  `GET /api/contact/{address}` (ONLY the recipient's token lists the
+  contacts shared with them).
 
 ---
 

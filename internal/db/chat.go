@@ -20,7 +20,7 @@ type rowQuerier interface {
 // from == to never matches anything by construction.
 func findChat(ctx context.Context, q rowQuerier, a, b string) (model.Chat, bool, error) {
 	row := q.QueryRowContext(ctx, `
-SELECT c.address, c.room, c.scenario, c.language, c.phase, c.phase_started_at, c.created_at
+SELECT c.address, c.room, c.scenario, c.language, c.phase, c.phase_started_at, c.done, c.created_at
 FROM chats c
 JOIN participants p1 ON p1.chat = c.address AND p1.user = ?
 JOIN participants p2 ON p2.chat = c.address AND p2.user = ?
@@ -32,14 +32,16 @@ LIMIT 1`, a, b)
 		c         model.Chat
 		createdAt string
 		startedAt string
+		done      int
 	)
-	if err := row.Scan(&c.Address, &c.Room, &c.Scenario, &c.Language, &c.Phase, &startedAt, &createdAt); err != nil {
+	if err := row.Scan(&c.Address, &c.Room, &c.Scenario, &c.Language, &c.Phase, &startedAt, &done, &createdAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return model.Chat{}, false, nil
 		}
 		return model.Chat{}, false, err
 	}
 	c.PhaseStartedAt = parseNullTS(sql.NullString{String: startedAt, Valid: startedAt != ""})
+	c.Done = done != 0
 	c.CreatedAt = parseTS(createdAt)
 	return c, true, nil
 }
@@ -109,19 +111,21 @@ func (d *DB) GetChat(ctx context.Context, address string) (model.Chat, []model.P
 // ChatByAddress returns a chat by its address.
 func (d *DB) ChatByAddress(ctx context.Context, address string) (model.Chat, bool, error) {
 	row := d.QueryRowContext(ctx,
-		`SELECT address, room, scenario, language, phase, phase_started_at, created_at FROM chats WHERE address = ?`, address)
+		`SELECT address, room, scenario, language, phase, phase_started_at, done, created_at FROM chats WHERE address = ?`, address)
 	var (
 		c         model.Chat
 		createdAt string
 		startedAt string
+		done      int
 	)
-	if err := row.Scan(&c.Address, &c.Room, &c.Scenario, &c.Language, &c.Phase, &startedAt, &createdAt); err != nil {
+	if err := row.Scan(&c.Address, &c.Room, &c.Scenario, &c.Language, &c.Phase, &startedAt, &done, &createdAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return model.Chat{}, false, nil
 		}
 		return model.Chat{}, false, err
 	}
 	c.PhaseStartedAt = parseNullTS(sql.NullString{String: startedAt, Valid: startedAt != ""})
+	c.Done = done != 0
 	c.CreatedAt = parseTS(createdAt)
 	return c, true, nil
 }
@@ -239,7 +243,7 @@ func (d *DB) ChatParticipants(ctx context.Context, chatAddress string) ([]model.
 // ListUserChats returns all chats the user participates in, newest first.
 func (d *DB) ListUserChats(ctx context.Context, user string) ([]model.Chat, error) {
 	rows, err := d.QueryContext(ctx, `
-SELECT c.address, c.room, c.scenario, c.language, c.phase, c.phase_started_at, c.created_at
+SELECT c.address, c.room, c.scenario, c.language, c.phase, c.phase_started_at, c.done, c.created_at
 FROM chats c
 JOIN participants p ON p.chat = c.address
 WHERE p.user = ?
@@ -255,11 +259,13 @@ ORDER BY c.created_at DESC, c.address ASC`, user)
 			c         model.Chat
 			createdAt string
 			startedAt string
+			done      int
 		)
-		if err := rows.Scan(&c.Address, &c.Room, &c.Scenario, &c.Language, &c.Phase, &startedAt, &createdAt); err != nil {
+		if err := rows.Scan(&c.Address, &c.Room, &c.Scenario, &c.Language, &c.Phase, &startedAt, &done, &createdAt); err != nil {
 			return nil, err
 		}
 		c.PhaseStartedAt = parseNullTS(sql.NullString{String: startedAt, Valid: startedAt != ""})
+		c.Done = done != 0
 		c.CreatedAt = parseTS(createdAt)
 		chats = append(chats, c)
 	}
@@ -345,8 +351,9 @@ func (d *DB) ChatKickoff(ctx context.Context, chatAddress string) (ChatKickoffRe
 	defer func() { _ = tx.Rollback() }()
 
 	// The chat must exist; a kickoff restarts the whole two-part structure
-	// from scratch: every earlier message of both phases is wiped and the
-	// phase returns to the networking conversation.
+	// from scratch: every earlier message of both phases is wiped, the
+	// phase returns to the networking conversation and the done marker is
+	// cleared (the chat is live again).
 	var exists string
 	err = tx.QueryRowContext(ctx, `SELECT address FROM chats WHERE address = ?`, chatAddress).Scan(&exists)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -356,7 +363,7 @@ func (d *DB) ChatKickoff(ctx context.Context, chatAddress string) (ChatKickoffRe
 		return res, err
 	}
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE chats SET phase = '', phase_started_at = '' WHERE address = ?`, chatAddress); err != nil {
+		`UPDATE chats SET phase = '', phase_started_at = '', done = 0 WHERE address = ?`, chatAddress); err != nil {
 		return res, err
 	}
 

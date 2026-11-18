@@ -73,7 +73,10 @@ type Chat struct {
 	Language       string     `json:"language" example:"en"`
 	Phase          string     `json:"phase" example:"networking"`
 	PhaseStartedAt *time.Time `json:"phase_started_at"`
-	CreatedAt      time.Time  `json:"created_at"`
+	// Done reports that the conversation reached its final goodbye: the
+	// farewell turn stamps it automatically; a kickoff resets it to false.
+	Done      bool      `json:"done" example:"false"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // Participant is one of the two chat members; unique key is (chat, user).
@@ -110,6 +113,84 @@ type Event struct {
 	NotBefore *time.Time `json:"not_before,omitempty"`
 }
 
+// Contact is a contact detail (messenger handle, email, ...) shared once
+// from one persona to another. The (from, to) pair is the unique key: a
+// persona can share its contacts with a given user only once, and only the
+// recipient (to) may read the record.
+type Contact struct {
+	From      string    `json:"from" example:"0xuser123"`
+	To        string    `json:"to" example:"0xuser456"`
+	Content   string    `json:"content" example:"telegram: @alice_paints"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// Summary is the hard-matching result (feature #35): the summarized chat of
+// a pair, the merged match score, and the networking checklist of closed
+// checkpoints. One record per user pair; a repeated hard-match request
+// returns the stored record.
+type Summary struct {
+	Chat  string `json:"chat" example:"0xchat123"`
+	Room  string `json:"room" example:"0xroom123"`
+	UserA string `json:"user_a" example:"0xuser123"`
+	UserB string `json:"user_b" example:"0xuser456"`
+	// Score is the merged hard-match score, strictly inside (0, 100).
+	Score       float64      `json:"score" example:"66.4"`
+	Checkpoints []Checkpoint `json:"checkpoints"`
+	// Description is the chat summarization produced by the hard match.
+	Description string    `json:"description" example:"Alice and Bob introduced themselves, found a shared love of watercolor and closed with a warm goodbye."`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+// Checkpoint is one networking criterion of the hard-match checklist with
+// its closed flag.
+type Checkpoint struct {
+	Key    string `json:"key" example:"introductions"`
+	Label  string `json:"label" example:"Both introduced themselves"`
+	Closed bool   `json:"closed" example:"true"`
+}
+
+// Networking checkpoint keys (feature #35). The canonical list and its
+// labels live here; the summaries table stores only the closed flags and
+// the rehydration fills the labels back from this list.
+const (
+	CheckpointIntroductions = "introductions"
+	CheckpointSharedTopics  = "shared_topics"
+	CheckpointBalancedTurns = "balanced_turns"
+	CheckpointQuestions     = "questions_answered"
+	CheckpointWarmFarewell  = "warm_farewell"
+)
+
+// NetworkingCheckpoints is the fixed checklist the hard match grades: every
+// entry marks one criterion of a good networking conversation.
+func NetworkingCheckpoints(language string) []Checkpoint {
+	ru := language == "ru"
+	return []Checkpoint{
+		{Key: CheckpointIntroductions,
+			Label:  ternaryStr(ru, "Оба представились в начале разговора", "Both introduced themselves at the start"),
+			Closed: false},
+		{Key: CheckpointSharedTopics,
+			Label:  ternaryStr(ru, "Нашли общую тему или интерес", "Found a shared topic or interest"),
+			Closed: false},
+		{Key: CheckpointBalancedTurns,
+			Label:  ternaryStr(ru, "Диалог сбалансирован: обе стороны активно участвовали", "Balanced dialog: both sides participated actively"),
+			Closed: false},
+		{Key: CheckpointQuestions,
+			Label:  ternaryStr(ru, "Вопросы были заданы и на них ответили", "Questions were asked and answered"),
+			Closed: false},
+		{Key: CheckpointWarmFarewell,
+			Label:  ternaryStr(ru, "Разговор закрыт тёплым прощанием", "Conversation closed with a warm farewell"),
+			Closed: false},
+	}
+}
+
+// ternaryStr returns a when ok, else b.
+func ternaryStr[T any](ok bool, a, b T) T {
+	if ok {
+		return a
+	}
+	return b
+}
+
 // Validation limits.
 const (
 	// MaxMessageContentLen is the maximum number of symbols in message content.
@@ -118,6 +199,12 @@ const (
 	MaxInterestTitleLen = 64
 	// MaxInterestsPerRequest bounds the bulk add/delete payload size.
 	MaxInterestsPerRequest = 50
+	// MaxContactContentLen is the maximum number of symbols in shared
+	// contact content.
+	MaxContactContentLen = 255
+	// MaxSummaryDescriptionLen is the maximum number of symbols in a
+	// stored chat summarization.
+	MaxSummaryDescriptionLen = 1000
 )
 
 // Queue event types.
