@@ -173,7 +173,7 @@ func NetworkingCheckpoints(language string) []Checkpoint {
 	return []Checkpoint{
 		{Key: CheckpointSharedIdea,
 			Label: ternaryStr(ru,
-				"Унёс из разговора новую идею или инсайт, которые стоит развивать дальше. По итогам беседы удалось сформулировать перспективную идею, требующую дальнейшей проработки",
+				"По итогам беседы удалось сформулировать перспективную идею, требующую дальнейшей проработки",
 				"Left the conversation with a new idea or insight worth developing further"),
 			Closed: false},
 		{Key: CheckpointExpertise,
