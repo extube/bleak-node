@@ -236,28 +236,30 @@ func HeuristicSummary(chat model.Chat, msgs []model.Message, subject string) db.
 		}
 	}
 
-	// concrete_followup: contact channels or agreements to continue, in
-	// the subject's own lines or the partner's offer to them.
-	followupMarkers := []string{
-		"@", "telegram", "t.me/", "whatsapp", "linkedin", "instagram",
-		"mail", "email", "напишу", "напишите", "свяжусь", "связаться",
-		"обменяемся", "телефон", "телеграм", "до связи", "буду на связи",
-		"i'll send", "i'll reach out", "reach out", "let's exchange",
-		"hit me up", "my number", "here's my", "follow up", "next week",
+	// shared_idea: idea- and insight-related phrasings — a proposal, a
+	// "what if", a plan to try or build something — in either side's
+	// lines.
+	ideaMarkers := []string{
+		"idea", "insight", "what if", "thinking of", "thought of",
+		"inspired", "should try", "let's build", "let's make",
+		"we could", "you could", "plan to", "want to try",
+		"идея", "идеи", "идею", "мысль", "задум", "вдохнов",
+		"что если", "предлага", "давай сделаем", "давай попробуем",
+		"стоит попробовать", "хочу попроб", "а что если",
 	}
-	followup := false
+	sharedIdea := false
 	for _, m := range msgs {
 		if m.From != subject && m.From != partner {
 			continue
 		}
 		low := strings.ToLower(m.Content)
-		for _, mk := range followupMarkers {
+		for _, mk := range ideaMarkers {
 			if strings.Contains(low, mk) {
-				followup = true
+				sharedIdea = true
 				break
 			}
 		}
-		if followup {
+		if sharedIdea {
 			break
 		}
 	}
@@ -303,7 +305,7 @@ func HeuristicSummary(chat model.Chat, msgs []model.Message, subject string) db.
 	return db.SummaryInput{
 		Description: heuristicDescription(chat, msgs, subject, countA, countB, questions),
 		Closed: []bool{
-			followup,   // concrete follow-up for the subject
+			sharedIdea, // the subject carries a fresh idea out of the dialog
 			expertise,  // the subject learned about the partner's work
 			reciprocal, // the subject's questions were picked up
 		},

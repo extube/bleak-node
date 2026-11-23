@@ -159,7 +159,7 @@ type Checkpoint struct {
 // labels live here; the summaries table stores only the closed flags and
 // the rehydration fills the labels back from this list.
 const (
-	CheckpointConcreteFollowup = "concrete_followup"
+	CheckpointSharedIdea       = "shared_idea"
 	CheckpointExpertise        = "expertise_exchange"
 	CheckpointReciprocalDialog = "reciprocal_dialog"
 )
@@ -171,10 +171,10 @@ const (
 func NetworkingCheckpoints(language string) []Checkpoint {
 	ru := language == "ru"
 	return []Checkpoint{
-		{Key: CheckpointConcreteFollowup,
+		{Key: CheckpointSharedIdea,
 			Label: ternaryStr(ru,
-				"Обменялись конкретными контактами или договорились о конкретном следующем шаге",
-				"Exchanged concrete contact details or agreed on a specific follow-up step"),
+				"Унёс из разговора новую идею или инсайт, которые стоит развивать дальше",
+				"Left the conversation with a new idea or insight worth developing further"),
 			Closed: false},
 		{Key: CheckpointExpertise,
 			Label: ternaryStr(ru,

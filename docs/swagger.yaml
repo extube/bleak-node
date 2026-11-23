@@ -923,10 +923,10 @@ paths:
       description: 'Summarizes the chat FROM THE FIRST USER''S PERSPECTIVE (the subject:
         how good the networking experience was for them, how useful the learned information
         is for their future aims and interests growth), grades the 3 strict networking
-        criteria (concrete_followup — exchanged concrete contact details or agreed
-        a specific follow-up step; expertise_exchange — each side learned something
-        concrete about the other''s work, skills or projects; reciprocal_dialog —
-        both sides asked follow-up questions and contributed roughly equally) and
+        criteria (shared_idea — the subject left the conversation with a new idea
+        or insight worth developing further; expertise_exchange — each side learned
+        something concrete about the other''s work, skills or projects; reciprocal_dialog
+        — both sides asked follow-up questions and contributed roughly equally) and
         merges the closed count with the time-independent match score: points = 16
         * closed + 0.52 * MatchV2, where MatchV2 = 100 * 2 * exact_interest_matches
         / (interests of the first + interests of the second) — the pure matching-interest

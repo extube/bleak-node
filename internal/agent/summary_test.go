@@ -37,7 +37,7 @@ func summaryChat() (model.Chat, []model.Message) {
 
 func TestSummarizeChatParsesLLM(t *testing.T) {
 	llm := &fakeSummaryLLM{answer: "```json\n" +
-		`{"summary": "Alice learned about Bob's studio.", "closed": ["concrete_followup", "expertise_exchange"]}` +
+		`{"summary": "Alice left with an idea for a zine of her postcards.", "closed": ["shared_idea", "expertise_exchange"]}` +
 		"\n```"}
 	s := NewSummarizer(nil)
 	s.llm = llm
@@ -47,7 +47,7 @@ func TestSummarizeChatParsesLLM(t *testing.T) {
 	if err != nil {
 		t.Fatalf("summarize: %v", err)
 	}
-	if in.Description != "Alice learned about Bob's studio." {
+	if in.Description != "Alice left with an idea for a zine of her postcards." {
 		t.Fatalf("description: %q", in.Description)
 	}
 	// The closed keys map onto the canonical order; the rest stay false.
@@ -95,13 +95,13 @@ func TestSummarizeChatFallsBackToHeuristic(t *testing.T) {
 	}
 }
 
-func TestHeuristicClosesFollowup(t *testing.T) {
+func TestHeuristicClosesSharedIdea(t *testing.T) {
 	chat, msgs := summaryChat()
 	msgs = append(msgs,
-		model.Message{From: "0xa", To: "0xb", Content: "Great meeting you! Here's my telegram: @alice, I'll send the sketch tomorrow."},
+		model.Message{From: "0xa", To: "0xb", Content: "Wait — what if we turned these postcards into a little zine? I want to try that this month."},
 	)
 	in := HeuristicSummary(chat, msgs, "0xa")
 	if !in.Closed[0] {
-		t.Fatalf("contact details must close the follow-up criterion: %v", in.Closed)
+		t.Fatalf("an idea to develop must close the shared_idea criterion: %v", in.Closed)
 	}
 }
