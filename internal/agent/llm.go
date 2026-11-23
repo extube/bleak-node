@@ -81,7 +81,7 @@ func (c *Client) Complete(ctx context.Context, prompt []llmMessage) (string, err
 	body, err := json.Marshal(chatRequest{
 		Model:            c.model,
 		Messages:         prompt,
-		MaxTokens:        512,
+		MaxTokens:        2048,
 		Temperature:      0.7,
 		Stream:           false,
 		ChatTemplateArgs: ternary(c.disableThinking, map[string]any{"enable_thinking": false}, nil),
