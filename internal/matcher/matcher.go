@@ -15,10 +15,9 @@
 //  4. sort the whole pool by points (desc; sender address, then receiver
 //     address break ties), drop the pairs that already carry a directed
 //     handshake (the slots go to NEW acquaintances) and send the handshake
-//     X -> Y for the top 2 * floor(sqrt(active users)) pairs — with three
-//     active users that is the TWO best pairs, e.g. A -> B and B -> C.
-//     Sending goes through the regular handshake path (idempotent per
-//     directed pair, balance rule intact, auto-chat on mutuality).
+//     X -> Y for the top floor(sqrt(active users)) pairs. Sending goes
+//     through the regular handshake path (idempotent per directed pair,
+//     balance rule intact, auto-chat on mutuality).
 package matcher
 
 import (
@@ -39,11 +38,11 @@ const (
 	Interval = 5 * time.Minute
 )
 
-// pairBudget caps the handshakes one job sends per room: twice the square
-// root of the room's ACTIVE user count, floored (three active users budget
-// the two best pairs, nine budget six, sixteen eight).
+// pairBudget caps the handshakes one job sends per room: the square root
+// of the room's ACTIVE user count, floored (three active users budget one
+// pair, nine budget three, sixteen four).
 func pairBudget(activeUsers int) int {
-	return 2 * int(math.Sqrt(float64(activeUsers)))
+	return int(math.Sqrt(float64(activeUsers)))
 }
 
 // Worker runs the auto-matchmaking job on its interval until ctx is done.
@@ -103,7 +102,7 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 }
 
 // matchRoom ranks every directed pair of one room's active users and sends
-// the top 2*floor(sqrt(users)) handshakes.
+// the top floor(sqrt(users)) handshakes.
 func (w *Worker) matchRoom(ctx context.Context, room model.Room) error {
 	users, err := w.db.ListActiveRoomUsers(ctx, room.Address)
 	if err != nil {

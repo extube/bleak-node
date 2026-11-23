@@ -94,18 +94,16 @@ func TestWorkerSendsBestPairs(t *testing.T) {
 		t.Fatalf("run once: %v", err)
 	}
 
-	// Job 1, budget 4 (2 * floor(sqrt(5))): the C=1 pair both ways
-	// (a->b, b->a) and the two C=0.8 pairs sent by the 10h-old senders
-	// (a->c, b->c) — carol's own pairs grade lower on her younger clock.
+	// Job 1, budget 2 (floor(sqrt(5))): the C=1 pair both ways (a->b,
+	// b->a) — the two best pairs of the pool, scored on the 10h-old
+	// sender clocks.
 	all := roomPairs(t, database, room.Address)
-	if len(all) != 4 {
-		t.Fatalf("job 1 must send exactly 4 handshakes, got %d: %v", len(all), all)
+	if len(all) != 2 {
+		t.Fatalf("job 1 must send exactly 2 handshakes, got %d: %v", len(all), all)
 	}
 	ab := map[string]bool{
-		addr["alice"] + "->" + addr["bob"]:   true,
-		addr["bob"] + "->" + addr["alice"]:   true,
-		addr["alice"] + "->" + addr["carol"]: true,
-		addr["bob"] + "->" + addr["carol"]:   true,
+		addr["alice"] + "->" + addr["bob"]: true,
+		addr["bob"] + "->" + addr["alice"]: true,
 	}
 	for _, p := range all {
 		key := p.FromAddress + "->" + p.ToAddress
@@ -118,43 +116,45 @@ func TestWorkerSendsBestPairs(t *testing.T) {
 	}
 
 	// Job 2 runs immediately: alice's and bob's clocks were reset by their
-	// job-1 outreach (t ~ 0 zeroes the exponent), while carol and dave
-	// never sent — so the pool re-ranks around them and the budget of 4
-	// goes to carol -> {alice, bob, dave} and dave -> carol.
+	// job-1 outreach (t ~ 0 zeroes the exponent), while carol (9h) and
+	// dave (10h) never sent — so the pool re-ranks around them and the
+	// budget of 2 goes to the carol -> alice, carol -> bob pair (both
+	// grade ~100 on carol's untouched clock, tied, both inside the cut).
 	if err := w.RunOnce(ctx); err != nil {
 		t.Fatalf("run twice: %v", err)
 	}
-	if out := outgoing(t, database, addr["carol"]); len(out) != 3 ||
-		!out[addr["alice"]] || !out[addr["bob"]] || !out[addr["dave"]] {
-		t.Fatalf("job 2 must connect carol to alice, bob and dave, got %v", out)
+	if out := outgoing(t, database, addr["carol"]); len(out) != 2 ||
+		!out[addr["alice"]] || !out[addr["bob"]] {
+		t.Fatalf("job 2 must connect carol to alice and bob, got %v", out)
 	}
-	if out := outgoing(t, database, addr["dave"]); len(out) != 1 || !out[addr["carol"]] {
-		t.Fatalf("job 2 must send dave -> carol, got %v", out)
-	}
-	if out := outgoing(t, database, addr["alice"]); len(out) != 2 {
+	if out := outgoing(t, database, addr["alice"]); len(out) != 1 {
 		t.Fatalf("alice must not send again right after job 1, got %v", out)
 	}
-	if out := outgoing(t, database, addr["bob"]); len(out) != 2 {
+	if out := outgoing(t, database, addr["bob"]); len(out) != 1 {
 		t.Fatalf("bob must not send again right after job 1, got %v", out)
+	}
+	if out := outgoing(t, database, addr["erin"]); len(out) != 0 {
+		t.Fatalf("erin must stay out through job 2, got %v", out)
 	}
 
 	// Simulate an hour passing (every sent handshake backdated), then job
-	// 3: the existing pairs are skipped, so the budget goes to the best
-	// NEW pairs — erin (never sent, t = 10h from creation, C = 0 grades
-	// 88.8) outranks the C=0.5 pairs of the 1h-old senders (85.2) and
-	// connects to everyone.
+	// 3: the existing pairs are skipped. Dave never sent, so his 10h clock
+	// dominates: dave -> carol (99.94) and dave -> alice (99.76) take the
+	// budget of 2 — carol's clock is only 1h old now and her remaining
+	// pairs grade 90.2, erin's clock-only pairs 88.8.
 	backdateRoomHandshakes(t, database, room.Address, 1)
 	if err := w.RunOnce(ctx); err != nil {
 		t.Fatalf("run thrice: %v", err)
 	}
-	out := outgoing(t, database, addr["erin"])
-	if len(out) != 4 {
-		t.Fatalf("job 3 must send erin -> everyone, got %v", out)
+	if out := outgoing(t, database, addr["dave"]); len(out) != 2 || !out[addr["carol"]] ||
+		!(out[addr["alice"]] || out[addr["bob"]]) {
+		t.Fatalf("job 3 must send dave -> carol plus one of dave -> alice/bob (tie), got %v", out)
 	}
-	for _, name := range []string{"alice", "bob", "carol", "dave"} {
-		if !out[addr[name]] {
-			t.Fatalf("erin must handshake %s in job 3, sent %v", name, out)
-		}
+	if out := outgoing(t, database, addr["carol"]); len(out) != 2 {
+		t.Fatalf("carol must not send in job 3, got %v", out)
+	}
+	if out := outgoing(t, database, addr["erin"]); len(out) != 0 {
+		t.Fatalf("erin must still wait (her clock-only pairs grade below), got %v", out)
 	}
 }
 
@@ -285,6 +285,9 @@ func TestWorkerSkipsInactiveUsersAndIdleRooms(t *testing.T) {
 		t.Fatalf("want 2 active users, got %d", len(active))
 	}
 
+	// The single active pair grades a budget of 1 (floor(sqrt(2))), so
+	// exactly one direction is sent — which one follows the address
+	// tiebreak of two equal scores.
 	w := New(database, slog.New(slog.NewTextHandler(testSink{}, nil)))
 	if err := w.RunOnce(ctx); err != nil {
 		t.Fatalf("run once: %v", err)
@@ -292,12 +295,17 @@ func TestWorkerSkipsInactiveUsersAndIdleRooms(t *testing.T) {
 	if out := outgoing(t, database, pool[0].Address); len(out) != 0 {
 		t.Fatalf("inactive user must receive no handshakes, sent %v", out)
 	}
-	// bob and carol rank each other (no interests anywhere): both directions.
-	if out := outgoing(t, database, pool[1].Address); len(out) != 1 || !out[pool[2].Address] {
-		t.Fatalf("bob must handshake carol, got %v", out)
+	bobOut := outgoing(t, database, pool[1].Address)
+	carolOut := outgoing(t, database, pool[2].Address)
+	total := len(bobOut) + len(carolOut)
+	if total != 1 {
+		t.Fatalf("budget 1 must send exactly one handshake, got %d (%v / %v)", total, bobOut, carolOut)
 	}
-	if out := outgoing(t, database, pool[2].Address); len(out) != 1 || !out[pool[1].Address] {
-		t.Fatalf("carol must handshake bob, got %v", out)
+	if len(bobOut) == 1 && !bobOut[pool[2].Address] {
+		t.Fatalf("bob's single send must go to carol, got %v", bobOut)
+	}
+	if len(carolOut) == 1 && !carolOut[pool[1].Address] {
+		t.Fatalf("carol's single send must go to bob, got %v", carolOut)
 	}
 	// The idle room is untouched: its (nonexistent) users were never read.
 	var count int
