@@ -169,15 +169,16 @@ func TestMatchEndpoint(t *testing.T) {
 	alice, aliceToken := joinTestRoom(t, ts, room, invite, "Alice")
 	bob, bobToken := joinTestRoom(t, ts, room, invite, "Bob")
 
-	// t = 1h (the FIRST persona's age, computed server-side), no handshake,
-	// no interests: C = 1 -> 100 * (1 - 1/2) = 50.
+	// t = 1h (the FIRST persona's creation fallback — she never sent a
+	// handshake), no handshake, no interests: C = 0, age-only growth ->
+	// sqrt(1) = 1 -> 100 * (1 - 1/2) = 50.
 	backdateTestUser(t, database, alice, 1)
 	code, res := matchPoints(t, ts.URL, room, alice, bob, aliceToken)
 	if code != http.StatusOK {
 		t.Fatalf("match: %s %v", http.StatusText(code), res)
 	}
 	if math.Abs(res["points"].(float64)-50) > 0.05 {
-		t.Fatalf("want ~50, got %v (%v)", res["points"], res)
+		t.Fatalf("age-only pair: want ~50, got %v (%v)", res["points"], res)
 	}
 
 	// Missing token: 401.
@@ -212,36 +213,39 @@ func TestMatchEndpoint(t *testing.T) {
 		t.Fatalf("legacy time field: want 400, got %d", code)
 	}
 
-	// Shared group alone moves nothing (the percent counts exact matches
-	// only), but the breakdown reports it.
+	// Shared group alone moves nothing (the coefficient counts exact
+	// matches only): C = 0, score stays 50 — the breakdown reports the
+	// group.
 	addTestInterests(t, ts.URL, room, alice, aliceToken, `{"title":"Chess","group":1,"key":7}`)
 	addTestInterests(t, ts.URL, room, bob, bobToken, `{"title":"Go","group":1,"key":8}`)
 	_, res = matchPoints(t, ts.URL, room, alice, bob, aliceToken)
 	if math.Abs(res["points"].(float64)-50) > 0.05 || res["shared_groups"].(float64) != 1 {
-		t.Fatalf("shared group: want ~50, got %v", res)
+		t.Fatalf("shared group: want ~50 with 1 group, got %v", res)
 	}
 
-	// Exact match: percent = 2*1/(1+2), C = 1 + 2/3 -> 70.
+	// Exact match: matched/total = 1/3, no handshakes (factor 2) ->
+	// C = 2/3; t = 1h (creation fallback) ->
+	// sqrt(1 + 2/3) = 1.291 -> 100 * (1 - 1/2^1.291) = 59.13.
 	addTestInterests(t, ts.URL, room, bob, bobToken, `{"title":"Chess","group":1,"key":7}`)
 	_, res = matchPoints(t, ts.URL, room, alice, bob, aliceToken)
-	if math.Abs(res["points"].(float64)-70) > 0.05 || res["exact_interest_matches"].(float64) != 1 {
-		t.Fatalf("exact match: want ~70, got %v", res)
+	if math.Abs(res["points"].(float64)-59.13) > 0.05 || res["exact_interest_matches"].(float64) != 1 {
+		t.Fatalf("exact match: want ~59.13, got %v", res)
 	}
 
-	// One-sided handshake (+1 direction). Alice's newest sent handshake is
-	// seconds old, so t ~ 0 and sqrt(t) ~ 0: points sit at the base of her
-	// coefficient, C = 1 + 1 + 2/3 = 2.6667 -> ~62.5.
+	// One-sided handshake (H_s = 1, factor 3 -> C = 3 * 1/3 = 1). Alice's
+	// newest sent handshake is seconds old, so t ~ 0 and the relation
+	// floors the summand: sqrt(0 + 1) = 1 -> ~50.
 	sendTestHandshake(t, ts.URL, alice, aliceToken, bob)
 	_, res = matchPoints(t, ts.URL, room, alice, bob, aliceToken)
-	if p := res["points"].(float64); p < 62 || p > 64 || res["handshake"] != true {
-		t.Fatalf("one-sided handshake: want ~62.5, got %v", res)
+	if p := res["points"].(float64); p < 49 || p > 51 || res["handshake"] != true {
+		t.Fatalf("one-sided handshake: want ~50 (relation floor), got %v", res)
 	}
 
-	// Mutual handshake: no instant 100 — C = 1 + 2 + 2/3 = 3.6667, and
-	// alice's last outreach is still seconds old (t ~ 0) -> ~72.7.
+	// Mutual handshake: H_r = 1 doubles the factor -> C = 5/3 ->
+	// sqrt(0 + 5/3) = 1.291 -> ~59.1.
 	sendTestHandshake(t, ts.URL, bob, bobToken, alice)
 	_, res = matchPoints(t, ts.URL, room, alice, bob, aliceToken)
-	if p := res["points"].(float64); p < 71 || p > 75 || res["mutual_handshake"] != true {
-		t.Fatalf("mutual handshake: want ~72.7, got %v", res)
+	if p := res["points"].(float64); p < 58 || p > 60 || res["mutual_handshake"] != true {
+		t.Fatalf("mutual handshake: want ~59.1 (relation floor), got %v", res)
 	}
 }

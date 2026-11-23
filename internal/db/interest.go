@@ -7,12 +7,12 @@
 //
 //	points = 100 * (1 - 1 / (C * 2^t))
 //
-// points = 100 * (1 - 1 / (C * 2^sqrt(t)))
+// points = 100 * (1 - 1 / 2^sqrt(t + C))
 //
 // with t the hours (float) since the FIRST persona's last SENT handshake —
 // the user the score is "for" (the auto-match matrix row); a persona that
 // has never sent a handshake counts from their creation instead — and C
-// assembled from the relations between the two (see MatchPoints).
+// the relation coefficient (see MatchPoints).
 package db
 
 import (
@@ -217,32 +217,34 @@ type listQuerier interface {
 }
 
 // MatchPoints computes the matching score of two personas inside one room
-// (feature #38 formula). Both users must live in the room (ErrNotFound
+// (feature #39 formula). Both users must live in the room (ErrNotFound
 // otherwise) and differ (ErrInvalid). The score:
 //
-//	points = 100 * (1 - 1 / (C * 2^sqrt(t)))
+//	points = 100 * (1 - 1 / 2^sqrt(t + C))
 //
 // with t the hours (float) since the FIRST persona's last SENT handshake in
 // the room — the user the score is "for" (the auto-match matrix row); a
 // persona that has never sent a handshake counts from their creation
-// instead. Never negative — a future timestamp counts as brand new. The
-// square root makes the growth fast in the first hours and slower after:
-// t = 1h grades a plain C = 1 pair 50, t = 4h grades it 75, saturation
-// (2^sqrt(t) overwhelming the denominator) needs days now instead of a
-// day. C is the relation coefficient:
+// instead. Never negative — a future timestamp counts as brand new. C is
+// the relation coefficient:
 //
-//		C = 1 + handshake directions + interest percent
+//		C = (2 + 2*H_r + 1*H_s) * matched / total
 //
-//	  - handshake directions: +1 per directed handshake between the two in
-//	    the room (0, 1 or 2);
-//	  - interest percent: 2 * exact interest matches / (interests of the
-//	    first + interests of the second) — every match (same group AND key)
-//	    counts on both sides, so two identical interest sets grade a full
-//	    100 % percent.
+//	  - H_r: 1 when the OTHER persona's directed handshake to the first
+//	    exists in the room (a received handshake counts double — reciprocity
+//	    is the stronger signal), else 0;
+//	  - H_s: 1 when the first persona's directed handshake to the other
+//	    exists, else 0;
+//	  - matched / total: exact interest matches (same group AND key) over
+//	    the interests total of both personas; a pair with no interests at
+//	    all grades C = 0.
 //
-// A mutual handshake is no longer an instant 100: it raises C, and the
-// score grows with the time since the persona's last outreach toward 100.
-// The result is clamped into [0, 100] and rounded to 2 decimals.
+// The coefficient lives INSIDE the square root as a SUMMAND: sqrt(t + C)
+// treats a unit of relation like an extra hour of idle time. A pair with
+// no relation (C = 0) grows on age alone — 50 after an hour, 75 after
+// four — while every shared interest and handshake direction pulls the
+// saturation (100) closer. The result is clamped into [0, 100] and
+// rounded to 2 decimals.
 func (d *DB) MatchPoints(ctx context.Context, roomAddress, first, second string) (MatchResult, error) {
 	var res MatchResult
 	if first == second {
@@ -277,19 +279,24 @@ func (d *DB) MatchPoints(ctx context.Context, roomAddress, first, second string)
 			fmt.Errorf("user %q not found in room %q", second, roomAddress))
 	}
 
-	// Handshake state between the two personas within the room.
-	var directions int
-	if err := tx.QueryRowContext(ctx, `
-		SELECT (SELECT EXISTS (SELECT 1 FROM handshakes
-			WHERE room = ? AND from_address = ? AND to_address = ?)) +
-		       (SELECT EXISTS (SELECT 1 FROM handshakes
-			WHERE room = ? AND from_address = ? AND to_address = ?))`,
-		roomAddress, first, second,
-		roomAddress, second, first).Scan(&directions); err != nil {
+	// Handshake directions between the two personas within the room:
+	// H_s = the first persona's handshake TO the other, H_r = the other's
+	// handshake received BY the first.
+	var hs, hr int
+	if err := tx.QueryRowContext(ctx,
+		`SELECT EXISTS (SELECT 1 FROM handshakes
+			WHERE room = ? AND from_address = ? AND to_address = ?)`,
+		roomAddress, first, second).Scan(&hs); err != nil {
 		return res, err
 	}
-	res.Handshake = directions > 0
-	res.MutualHandshake = directions == 2
+	if err := tx.QueryRowContext(ctx,
+		`SELECT EXISTS (SELECT 1 FROM handshakes
+			WHERE room = ? AND from_address = ? AND to_address = ?)`,
+		roomAddress, second, first).Scan(&hr); err != nil {
+		return res, err
+	}
+	res.Handshake = hs+hr > 0
+	res.MutualHandshake = hs+hr == 2
 
 	// Interests of both personas: exact matches (same group AND key) and
 	// shared groups (the group appears on both sides).
@@ -299,21 +306,22 @@ func (d *DB) MatchPoints(ctx context.Context, roomAddress, first, second string)
 		return res, err
 	}
 
-	// C: base 1 (keeps the denominator non-zero) + handshake directions +
-	// the matching-interest percent (matches count on both sides).
+	// C = (2 + 2*H_r + 1*H_s) * matched / total — a received handshake
+	// counts double, a sent one single; the interest part is the exact
+	// matches over the interests total of BOTH sides. No interests grades
+	// C = 0 (the pair stays at 0 points whatever its age).
 	totalInterests := len(interestsA) + len(interestsB)
-	percent := 0.0
+	c := 0.0
 	if totalInterests > 0 {
-		percent = 2 * float64(res.ExactMatches) / float64(totalInterests)
+		c = float64(2+2*hr+hs) * float64(res.ExactMatches) / float64(totalInterests)
 	}
-	c := 1 + float64(directions) + percent
 
 	// t: hours since the FIRST persona's last SENT handshake in the room
 	// (the recency of their last outreach); a persona that never sent one
 	// falls back to their creation age. Never negative — a future
-	// timestamp counts as brand new. The growth term is the SQUARE ROOT
-	// of t, so the score rises fast early and slows down later:
-	// points = 100 * (1 - 1 / (C * 2^sqrt(t))).
+	// timestamp counts as brand new. C lives INSIDE the sqrt as a
+	// summand — a unit of relation acts like an extra hour:
+	// points = 100 * (1 - 1 / 2^sqrt(t + C)).
 	var lastSent sql.NullString
 	if err := tx.QueryRowContext(ctx,
 		`SELECT MAX(created_at) FROM handshakes WHERE room = ? AND from_address = ?`,
@@ -328,7 +336,7 @@ func (d *DB) MatchPoints(ctx context.Context, roomAddress, first, second string)
 		t = 0
 	}
 
-	res.Points = 100 * (1 - 1/(c*math.Pow(2, math.Sqrt(t))))
+	res.Points = 100 * (1 - 1/math.Pow(2, math.Sqrt(t+c)))
 	// Clamp into [0, 100]; round to 2 decimals so clients see clean numbers.
 	res.Points = math.Max(0, math.Min(100, res.Points))
 	res.Points = math.Round(res.Points*100) / 100

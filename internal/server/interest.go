@@ -32,7 +32,8 @@ type DeleteInterestsRequest struct {
 // MatchRequest is the body for POST /api/match. It carries no time: the
 // formula's t is computed server-side as the hours since the FIRST
 // persona's last sent handshake (since their creation when they never sent
-// one) — feature #38.
+// one) — feature #39; the relation coefficient C weighs received
+// handshakes double and lives inside the growth's square root.
 type MatchRequest struct {
 	RoomAddress       string `json:"room_address" example:"0xroom123"`
 	FirstUserAddress  string `json:"first_user_address" example:"0xuser123"`
@@ -149,7 +150,7 @@ func (s *Server) DeleteUserInterests(w http.ResponseWriter, r *http.Request) {
 // MatchPoints computes the matching score of two personas.
 //
 //	@Summary		matching score of two users
-//	@Description	Computes the matching points (0..100) of two personas inside one room: points = 100 * (1 - 1/(C * 2^sqrt(t))) with t the hours (float) since the FIRST persona's last sent handshake in the room (since their creation when they never sent one; computed server-side; the request carries no time). C = 1 + handshake directions (+1 per directed handshake between the two in the room) + the matching-interest percent (2 * exact interest matches / the interests total of both personas; every match is the same group AND key, counted on both sides — identical interest sets grade a full 100 %). The square root makes the score grow fast in the first hours and slower afterwards. Requires the FIRST persona's Bearer token; both users must live in the room.
+//	@Description	Computes the matching points (0..100) of two personas inside one room: points = 100 * (1 - 1/2^sqrt(t + C)) with t the hours (float) since the FIRST persona's last sent handshake in the room (since their creation when they never sent one; computed server-side; the request carries no time) and C = (2 + 2*H_r + 1*H_s) * matched_interests / total_interests_both_sides, where H_r is 1 when the OTHER persona's directed handshake to the first exists in the room (received handshakes count double), H_s is 1 when the first persona's handshake to the other exists, and matched/total is the exact interest matches (same group AND key, counted on both sides) over the interests total of both personas. C lives inside the sqrt as a summand — a unit of relation acts like an extra hour of idle time; a pair with no relation grows on age alone. Requires the FIRST persona's Bearer token; both users must live in the room.
 //	@Tags			matching
 //	@Security		UserToken
 //	@Accept			json
