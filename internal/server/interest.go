@@ -31,7 +31,8 @@ type DeleteInterestsRequest struct {
 
 // MatchRequest is the body for POST /api/match. It carries no time: the
 // formula's t is computed server-side as the hours since the FIRST
-// persona's creation (feature #36).
+// persona's last sent handshake (since their creation when they never sent
+// one) — feature #38.
 type MatchRequest struct {
 	RoomAddress       string `json:"room_address" example:"0xroom123"`
 	FirstUserAddress  string `json:"first_user_address" example:"0xuser123"`
@@ -148,7 +149,7 @@ func (s *Server) DeleteUserInterests(w http.ResponseWriter, r *http.Request) {
 // MatchPoints computes the matching score of two personas.
 //
 //	@Summary		matching score of two users
-//	@Description	Computes the matching points (0..100) of two personas inside one room: points = 100 * (1 - 1/(C * 2^t)) with t the hours (float) since the FIRST persona's creation (computed server-side; the request carries no time). C = 1 + handshake directions (+1 per directed handshake between the two in the room) + the matching-interest percent (2 * exact interest matches / the interests total of both personas; every match is the same group AND key, counted on both sides — identical interest sets grade a full 100 %). The score grows with the first persona's age toward 100. Requires the FIRST persona's Bearer token; both users must live in the room.
+//	@Description	Computes the matching points (0..100) of two personas inside one room: points = 100 * (1 - 1/(C * 2^sqrt(t))) with t the hours (float) since the FIRST persona's last sent handshake in the room (since their creation when they never sent one; computed server-side; the request carries no time). C = 1 + handshake directions (+1 per directed handshake between the two in the room) + the matching-interest percent (2 * exact interest matches / the interests total of both personas; every match is the same group AND key, counted on both sides — identical interest sets grade a full 100 %). The square root makes the score grow fast in the first hours and slower afterwards. Requires the FIRST persona's Bearer token; both users must live in the room.
 //	@Tags			matching
 //	@Security		UserToken
 //	@Accept			json

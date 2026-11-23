@@ -228,18 +228,20 @@ func TestMatchEndpoint(t *testing.T) {
 		t.Fatalf("exact match: want ~70, got %v", res)
 	}
 
-	// One-sided handshake (+1 direction; the balance comes from the welcome
-	// handshake): C = 1 + 1 + 2/3 -> 81.25.
+	// One-sided handshake (+1 direction). Alice's newest sent handshake is
+	// seconds old, so t ~ 0 and sqrt(t) ~ 0: points sit at the base of her
+	// coefficient, C = 1 + 1 + 2/3 = 2.6667 -> ~62.5.
 	sendTestHandshake(t, ts.URL, alice, aliceToken, bob)
 	_, res = matchPoints(t, ts.URL, room, alice, bob, aliceToken)
-	if math.Abs(res["points"].(float64)-81.25) > 0.05 || res["handshake"] != true {
-		t.Fatalf("one-sided handshake: want ~81.25, got %v", res)
+	if p := res["points"].(float64); p < 62 || p > 64 || res["handshake"] != true {
+		t.Fatalf("one-sided handshake: want ~62.5, got %v", res)
 	}
 
-	// Mutual handshake: no instant 100 anymore — C = 1 + 2 + 2/3 -> 86.36.
+	// Mutual handshake: no instant 100 — C = 1 + 2 + 2/3 = 3.6667, and
+	// alice's last outreach is still seconds old (t ~ 0) -> ~72.7.
 	sendTestHandshake(t, ts.URL, bob, bobToken, alice)
 	_, res = matchPoints(t, ts.URL, room, alice, bob, aliceToken)
-	if math.Abs(res["points"].(float64)-86.36) > 0.05 || res["mutual_handshake"] != true {
-		t.Fatalf("mutual handshake: want ~86.36, got %v", res)
+	if p := res["points"].(float64); p < 71 || p > 75 || res["mutual_handshake"] != true {
+		t.Fatalf("mutual handshake: want ~72.7, got %v", res)
 	}
 }

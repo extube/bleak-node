@@ -110,7 +110,8 @@ func (w *Worker) matchRoom(ctx context.Context, room model.Room) error {
 
 		// Matrix row of `from`: the match score against every other active
 		// user of the room (the score is computed AS `from` — the formula's
-		// t is the hours since their creation).
+		// t is the hours since their last sent handshake, or since their
+		// creation when they never sent one).
 		row := make([]candidate, 0, len(users)-1)
 		for j := range users {
 			to := users[j]

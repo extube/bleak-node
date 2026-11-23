@@ -672,7 +672,7 @@
                         "UserToken": []
                     }
                 ],
-                "description": "Computes the matching points (0..100) of two personas inside one room: points = 100 * (1 - 1/(C * 2^t)) with t the hours (float) since the FIRST persona's creation (computed server-side; the request carries no time). C = 1 + handshake directions (+1 per directed handshake between the two in the room) + the matching-interest percent (2 * exact interest matches / the interests total of both personas; every match is the same group AND key, counted on both sides — identical interest sets grade a full 100 %). The score grows with the first persona's age toward 100. Requires the FIRST persona's Bearer token; both users must live in the room.",
+                "description": "Computes the matching points (0..100) of two personas inside one room: points = 100 * (1 - 1/(C * 2^sqrt(t))) with t the hours (float) since the FIRST persona's last sent handshake in the room (since their creation when they never sent one; computed server-side; the request carries no time). C = 1 + handshake directions (+1 per directed handshake between the two in the room) + the matching-interest percent (2 * exact interest matches / the interests total of both personas; every match is the same group AND key, counted on both sides — identical interest sets grade a full 100 %). The square root makes the score grow fast in the first hours and slower afterwards. Requires the FIRST persona's Bearer token; both users must live in the room.",
                 "consumes": [
                     "application/json"
                 ],

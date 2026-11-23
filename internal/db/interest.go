@@ -7,8 +7,12 @@
 //
 //	points = 100 * (1 - 1 / (C * 2^t))
 //
-// with t the hours since the FIRST persona's creation and C assembled from
-// the relations between the two (see MatchPoints).
+// points = 100 * (1 - 1 / (C * 2^sqrt(t)))
+//
+// with t the hours (float) since the FIRST persona's last SENT handshake —
+// the user the score is "for" (the auto-match matrix row); a persona that
+// has never sent a handshake counts from their creation instead — and C
+// assembled from the relations between the two (see MatchPoints).
 package db
 
 import (
@@ -213,14 +217,19 @@ type listQuerier interface {
 }
 
 // MatchPoints computes the matching score of two personas inside one room
-// (feature #36 formula). Both users must live in the room (ErrNotFound
+// (feature #38 formula). Both users must live in the room (ErrNotFound
 // otherwise) and differ (ErrInvalid). The score:
 //
-//	points = 100 * (1 - 1 / (C * 2^t))
+//	points = 100 * (1 - 1 / (C * 2^sqrt(t)))
 //
-// with t the hours (float) since the FIRST persona's creation — the user
-// the score is "for" (the auto-match matrix row) — and C the relation
-// coefficient:
+// with t the hours (float) since the FIRST persona's last SENT handshake in
+// the room — the user the score is "for" (the auto-match matrix row); a
+// persona that has never sent a handshake counts from their creation
+// instead. Never negative — a future timestamp counts as brand new. The
+// square root makes the growth fast in the first hours and slower after:
+// t = 1h grades a plain C = 1 pair 50, t = 4h grades it 75, saturation
+// (2^sqrt(t) overwhelming the denominator) needs days now instead of a
+// day. C is the relation coefficient:
 //
 //		C = 1 + handshake directions + interest percent
 //
@@ -232,8 +241,8 @@ type listQuerier interface {
 //	    100 % percent.
 //
 // A mutual handshake is no longer an instant 100: it raises C, and the
-// score grows with the personas' age toward 100. The result is clamped
-// into [0, 100] and rounded to 2 decimals.
+// score grows with the time since the persona's last outreach toward 100.
+// The result is clamped into [0, 100] and rounded to 2 decimals.
 func (d *DB) MatchPoints(ctx context.Context, roomAddress, first, second string) (MatchResult, error) {
 	var res MatchResult
 	if first == second {
@@ -299,14 +308,27 @@ func (d *DB) MatchPoints(ctx context.Context, roomAddress, first, second string)
 	}
 	c := 1 + float64(directions) + percent
 
-	// t: hours since the first persona's creation (never negative — a
-	// future-created row is treated as brand new).
+	// t: hours since the FIRST persona's last SENT handshake in the room
+	// (the recency of their last outreach); a persona that never sent one
+	// falls back to their creation age. Never negative — a future
+	// timestamp counts as brand new. The growth term is the SQUARE ROOT
+	// of t, so the score rises fast early and slows down later:
+	// points = 100 * (1 - 1 / (C * 2^sqrt(t))).
+	var lastSent sql.NullString
+	if err := tx.QueryRowContext(ctx,
+		`SELECT MAX(created_at) FROM handshakes WHERE room = ? AND from_address = ?`,
+		roomAddress, first).Scan(&lastSent); err != nil {
+		return res, err
+	}
 	t := time.Since(parseTS(createdFirst)).Hours()
+	if lastSent.Valid {
+		t = time.Since(parseTS(lastSent.String)).Hours()
+	}
 	if t < 0 {
 		t = 0
 	}
 
-	res.Points = 100 * (1 - 1/(c*math.Pow(2, t)))
+	res.Points = 100 * (1 - 1/(c*math.Pow(2, math.Sqrt(t))))
 	// Clamp into [0, 100]; round to 2 decimals so clients see clean numbers.
 	res.Points = math.Max(0, math.Min(100, res.Points))
 	res.Points = math.Round(res.Points*100) / 100
