@@ -7,7 +7,7 @@
 //  1. fetch every room with at least one active invite code (not revoked,
 //     not expired) — rooms host live events, the rest is idle;
 //  2. fetch the room's ACTIVE users (active = true, not deleted) and
-//     check the room handshake cap: at N^2/10 (N = active users) the room
+//     check the room handshake cap: at N^2/3 (N = active users) the room
 //     is saturated and skipped (manual handshake sends stay open);
 //  3. build the PAIR POOL: every directed pair X -> Y of the active users
 //     with its match points from POST /api/match —
@@ -48,11 +48,11 @@ func pairBudget(activeUsers int) int {
 }
 
 // roomHandshakeCap caps the handshakes a room may hold in total at
-// N^2 / 10 of its active user count N, floored (five users cap at 2,
-// sixteen at 25, thirty-eight at 144). At or above the cap the
-// auto-matcher skips the room — users can still send handshakes by hand.
+// N^2 / 3 of its active user count N, floored (two users cap at 1, five at
+// 8, thirty-eight at 481). At or above the cap the auto-matcher skips the
+// room — users can still send handshakes by hand.
 func roomHandshakeCap(activeUsers int) int {
-	return activeUsers * activeUsers / 10
+	return activeUsers * activeUsers / 3
 }
 
 // Worker runs the auto-matchmaking job on its interval until ctx is done.
@@ -123,7 +123,7 @@ func (w *Worker) matchRoom(ctx context.Context, room model.Room) error {
 		return nil
 	}
 
-	// Room handshake cap (feature #45): at N^2/10 (N = active users) the
+	// Room handshake cap (feature #46): at N^2/3 (N = active users) the
 	// room is saturated — the auto-matcher skips it entirely (manual
 	// sends through the API stay available).
 	count, err := w.db.CountRoomHandshakes(ctx, room.Address)

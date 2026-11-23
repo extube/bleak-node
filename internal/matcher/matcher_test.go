@@ -115,44 +115,52 @@ func TestWorkerSendsBestPairs(t *testing.T) {
 		t.Fatalf("erin shares nothing and must stay out of job 1, got %v", out)
 	}
 
-	// Job 2 runs immediately: the budget of 2 (floor(sqrt(5))) was spent
-	// on the C=1 pair AND the room cap (5^2 / 10 = 2) is now reached —
-	// the auto-matcher skips the room and sends nothing more.
+	// Job 2 runs immediately: alice's and bob's clocks were reset by their
+	// job-1 outreach (t ~ 0 zeroes the exponent), while carol (9h) and
+	// dave (10h) never sent — so the pool re-ranks around them and the
+	// budget of 2 goes to the carol -> alice, carol -> bob pair (both
+	// grade ~100 on carol's untouched clock, tied, both inside the cut).
 	if err := w.RunOnce(ctx); err != nil {
 		t.Fatalf("run twice: %v", err)
 	}
-	if out := outgoing(t, database, addr["carol"]); len(out) != 0 {
-		t.Fatalf("the capped room must be skipped in job 2, carol sent %v", out)
+	if out := outgoing(t, database, addr["carol"]); len(out) != 2 ||
+		!out[addr["alice"]] || !out[addr["bob"]] {
+		t.Fatalf("job 2 must connect carol to alice and bob, got %v", out)
 	}
 	if out := outgoing(t, database, addr["alice"]); len(out) != 1 {
-		t.Fatalf("alice must hold only her job-1 send, got %v", out)
+		t.Fatalf("alice must not send again right after job 1, got %v", out)
 	}
 	if out := outgoing(t, database, addr["bob"]); len(out) != 1 {
-		t.Fatalf("bob must hold only his job-1 send, got %v", out)
+		t.Fatalf("bob must not send again right after job 1, got %v", out)
 	}
 	if out := outgoing(t, database, addr["erin"]); len(out) != 0 {
-		t.Fatalf("erin must stay out, got %v", out)
+		t.Fatalf("erin must stay out through job 2, got %v", out)
 	}
 
-	// Even with simulated time passing, the capped room stays skipped.
+	// Simulate an hour passing (every sent handshake backdated), then job
+	// 3: the existing pairs are skipped. Dave never sent, so his 10h clock
+	// dominates: dave -> carol (99.94) and dave -> alice/bob (99.76, tie)
+	// take the budget of 2 — carol's clock is only 1h old now and her
+	// remaining pairs grade 90.2, erin's clock-only pairs 88.8. The room
+	// count (4 -> 6) stays under the cap (5^2/3 = 8).
 	backdateRoomHandshakes(t, database, room.Address, 1)
 	if err := w.RunOnce(ctx); err != nil {
 		t.Fatalf("run thrice: %v", err)
 	}
-	if out := outgoing(t, database, addr["dave"]); len(out) != 0 {
-		t.Fatalf("the capped room must be skipped in job 3, dave sent %v", out)
+	if out := outgoing(t, database, addr["dave"]); len(out) != 2 || !out[addr["carol"]] ||
+		!(out[addr["alice"]] || out[addr["bob"]]) {
+		t.Fatalf("job 3 must send dave -> carol plus one of dave -> alice/bob (tie), got %v", out)
+	}
+	if out := outgoing(t, database, addr["carol"]); len(out) != 2 {
+		t.Fatalf("carol must not send in job 3, got %v", out)
 	}
 	if out := outgoing(t, database, addr["erin"]); len(out) != 0 {
-		t.Fatalf("the capped room must be skipped in job 3, erin sent %v", out)
-	}
-	if all := roomPairs(t, database, room.Address); len(all) != 2 {
-		t.Fatalf("the capped room must hold exactly its 2 handshakes, got %v", all)
+		t.Fatalf("erin must still wait (her clock-only pairs grade below), got %v", out)
 	}
 }
 
-// TestWorkerStopsAtRoomCap verifies the cap check directly: a room whose
-// handshakes already reached N^2/10 of its active users is skipped on the
-// first job (three users cap at 0, so any handshake count saturates it).
+// TestWorkerStopsAtRoomCap verifies the cap check directly: at or above
+// N^2/3 handshakes (N = active users) the room is skipped on the job.
 func TestWorkerStopsAtRoomCap(t *testing.T) {
 	database := matchTestDB(t)
 	ctx := context.Background()
@@ -164,8 +172,8 @@ func TestWorkerStopsAtRoomCap(t *testing.T) {
 	if _, err := database.CreateRoomInvite(ctx, room.Address, time.Now().Add(db.DefaultInviteExpiry)); err != nil {
 		t.Fatalf("create invite: %v", err)
 	}
-	// Three active users cap the room at 0 (3^2/10); the pair
-	// alice <-> bob already carries both directions.
+	// Three active users cap the room at 3 (3^2/3); the pair alice <-> bob
+	// already carries both directions, so only carol's pairs are new.
 	addr := map[string]string{}
 	for _, name := range []string{"alice", "bob", "carol"} {
 		u := model.User{Name: name}
@@ -190,17 +198,40 @@ func TestWorkerStopsAtRoomCap(t *testing.T) {
 	if err := w.RunOnce(ctx); err != nil {
 		t.Fatalf("run once: %v", err)
 	}
-	// The cap (2) is already reached: no auto sends at all — the remaining
-	// pairs (alice->carol, carol->alice, bob->carol, carol->bob) stay
-	// untouched by the worker.
-	if out := outgoing(t, database, addr["alice"]); len(out) != 1 || !out[addr["bob"]] {
-		t.Fatalf("capped room must not auto-send, alice sent %v", out)
+	// The count (2) sits under the cap (3): the budget of 1 goes to the
+	// best NEW pair — the all-equal scores break on addresses, so the
+	// stable contract is one fresh send involving carol.
+	bobOut := outgoing(t, database, addr["bob"])
+	carolOut := outgoing(t, database, addr["carol"])
+	aliceOut := outgoing(t, database, addr["alice"])
+	if len(bobOut)+len(carolOut)+len(aliceOut) != 3 {
+		t.Fatalf("under-cap room must send one new handshake, got %v/%v/%v", aliceOut, bobOut, carolOut)
 	}
-	if out := outgoing(t, database, addr["bob"]); len(out) != 1 || !out[addr["alice"]] {
-		t.Fatalf("capped room must not auto-send, bob sent %v", out)
+	if !carolOut[addr["alice"]] && !carolOut[addr["bob"]] &&
+		!aliceOut[addr["carol"]] && !bobOut[addr["carol"]] {
+		t.Fatalf("the fresh handshake must involve carol: %v/%v/%v", aliceOut, bobOut, carolOut)
 	}
-	if out := outgoing(t, database, addr["carol"]); len(out) != 0 {
-		t.Fatalf("capped room must not auto-send, carol sent %v", out)
+
+	// Seed one more (the room is now at its cap of 3): the next job must
+	// send nothing.
+	if _, err := database.ExecContext(ctx,
+		`INSERT INTO handshakes (tx_id, from_address, to_address, room, status, value, created_at)
+		 VALUES ('0xtxc', ?, ?, ?, 1, 1, ?)`, addr["carol"], addr["alice"], room.Address, now); err != nil {
+		t.Fatalf("seed handshake: %v", err)
+	}
+	before := 0
+	for _, name := range []string{"alice", "bob", "carol"} {
+		before += len(outgoing(t, database, addr[name]))
+	}
+	if err := w.RunOnce(ctx); err != nil {
+		t.Fatalf("run at cap: %v", err)
+	}
+	total := 0
+	for _, name := range []string{"alice", "bob", "carol"} {
+		total += len(outgoing(t, database, addr[name]))
+	}
+	if total != before {
+		t.Fatalf("at-cap room must not auto-send: %d -> %d", before, total)
 	}
 }
 
@@ -331,10 +362,9 @@ func TestWorkerSkipsInactiveUsersAndIdleRooms(t *testing.T) {
 		t.Fatalf("want 2 active users, got %d", len(active))
 	}
 
-	// Two active users cap the room at 0 (2^2 / 10) — the auto-matcher
-	// skips it entirely, even with an unused pair budget (floor(sqrt(2))).
-	// Manual sends through the API stay open, but the test does not touch
-	// them.
+	// Two active users cap the room at 1 (2^2/3): the single active pair
+	// grades a budget of 1 (floor(sqrt(2))), so exactly one direction is
+	// sent — which one follows the address tiebreak of two equal scores.
 	w := New(database, slog.New(slog.NewTextHandler(testSink{}, nil)))
 	if err := w.RunOnce(ctx); err != nil {
 		t.Fatalf("run once: %v", err)
@@ -342,11 +372,17 @@ func TestWorkerSkipsInactiveUsersAndIdleRooms(t *testing.T) {
 	if out := outgoing(t, database, pool[0].Address); len(out) != 0 {
 		t.Fatalf("inactive user must receive no handshakes, sent %v", out)
 	}
-	if out := outgoing(t, database, pool[1].Address); len(out) != 0 {
-		t.Fatalf("the cap-0 room must be skipped, bob sent %v", out)
+	bobOut := outgoing(t, database, pool[1].Address)
+	carolOut := outgoing(t, database, pool[2].Address)
+	total := len(bobOut) + len(carolOut)
+	if total != 1 {
+		t.Fatalf("budget 1 must send exactly one handshake, got %d (%v / %v)", total, bobOut, carolOut)
 	}
-	if out := outgoing(t, database, pool[2].Address); len(out) != 0 {
-		t.Fatalf("the cap-0 room must be skipped, carol sent %v", out)
+	if len(bobOut) == 1 && !bobOut[pool[2].Address] {
+		t.Fatalf("bob's single send must go to carol, got %v", bobOut)
+	}
+	if len(carolOut) == 1 && !carolOut[pool[1].Address] {
+		t.Fatalf("carol's single send must go to bob, got %v", carolOut)
 	}
 	// The idle room is untouched: its (nonexistent) users were never read.
 	var count int
