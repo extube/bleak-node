@@ -28,7 +28,7 @@ func TestHardMatchPerDirection(t *testing.T) {
 	seedMessage(t, d, "0xchat", "0xb", "0xa", "Nice to meet you.", time.Now().UTC())
 	ctx := context.Background()
 
-	// No interests: MatchV2 = 0; 2 of 3 criteria closed grade 2 * 16 = 32.
+	// No interests: MatchV2 = 0; 2 of 3 criteria closed grade 2 * 22 = 44.
 	summary, created, err := d.HardMatch(ctx, "0xroom", "0xa", "0xb",
 		summarizeStub(2, "A useful exchange."))
 	if err != nil {
@@ -37,8 +37,8 @@ func TestHardMatchPerDirection(t *testing.T) {
 	if !created {
 		t.Fatal("first hard match must create the record")
 	}
-	if summary.Score != 32 {
-		t.Fatalf("merged score: want 32 (16 * 2 closed, MatchV2 = 0), got %v", summary.Score)
+	if summary.Score != 44 {
+		t.Fatalf("merged score: want 44 (22 * 2 closed, MatchV2 = 0), got %v", summary.Score)
 	}
 	if summary.Chat != "0xchat" || summary.Room != "0xroom" {
 		t.Fatalf("chat/room wrong: %+v", summary)
@@ -124,7 +124,7 @@ func TestHardMatchChecklistWeight(t *testing.T) {
 			t.Fatalf("direction must be created once per stub run (closed=%d)", tc.closed)
 		}
 		if closed := tc.closed; closed > 0 {
-			if want := 16.0 * float64(closed); summary.Score != want {
+			if want := 22.0 * float64(closed); summary.Score != want {
 				t.Fatalf("closed=%d: want %.0f, got %v", closed, want, summary.Score)
 			}
 		} else if summary.Score != 0.01 {
@@ -156,8 +156,8 @@ func TestHardMatchHandshakesWeighNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("hard match: %v", err)
 	}
-	if summary.Score != 32 {
-		t.Fatalf("handshakes must weigh nothing: want 32, got %v", summary.Score)
+	if summary.Score != 44 {
+		t.Fatalf("handshakes must weigh nothing: want 44, got %v", summary.Score)
 	}
 }
 

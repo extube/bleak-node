@@ -20,14 +20,14 @@ import (
 	"github.com/extube/bleak-node/internal/model"
 )
 
-// Summary weights (feature #43): the checklist carries 48% of the score
-// (3 criteria, 16 points each), the time-independent match score carries
-// 52%.
+// Summary weights (feature #49): the checklist carries 66% of the score
+// (3 criteria, 22 points each), the time-independent match score carries
+// 34%.
 const (
 	summaryCheckpoints    = 3
-	summaryItemPoints     = 16.0
-	summaryChecklistShare = summaryCheckpoints * summaryItemPoints // 48
-	summaryMatchShare     = 0.52
+	summaryItemPoints     = 22.0
+	summaryChecklistShare = summaryCheckpoints * summaryItemPoints // 66
+	summaryMatchShare     = 0.34
 )
 
 // SummaryInput is what a chat summarizer feeds into the hard match: the
@@ -59,12 +59,12 @@ type SummarizeFunc func(ctx context.Context, chat model.Chat, msgs []model.Messa
 //     merged with the time-independent match score (MatchPointsV2) and the
 //     record is stored under the requester's direction:
 //
-//     points = 16 * closed + 0.52 * MatchV2
+//     points = 22 * closed + 0.34 * MatchV2
 //
 //     with MatchV2 = 100 * 2 * exactInterestMatches /
 //     (interests of the first + interests of the second) — the pure
 //     matching-interest percent, no time and no handshakes. Three closed
-//     criteria add 48, a full MatchV2 adds 52, so the merged score spans
+//     criteria add 66, a full MatchV2 adds 34, so the merged score spans
 //     (0, 100) and is pinned into the open interval by the summaries table
 //     CHECK constraint.
 func (d *DB) HardMatch(ctx context.Context, roomAddress, first, second string, summarize SummarizeFunc) (model.Summary, bool, error) {
@@ -180,13 +180,13 @@ func (d *DB) HardMatch(ctx context.Context, roomAddress, first, second string, s
 // merged score and the rehydrated checkpoint list. The description is
 // capped at MaxSummaryDescriptionLen symbols.
 //
-// The merged score (feature #43):
+// The merged score (feature #49):
 //
-//	points = 16 * closed + 0.52 * MatchV2
+//	points = 22 * closed + 0.34 * MatchV2
 //
 // with MatchV2 = 100 * 2 * exactInterestMatches / (interests of the first +
 // interests of the second) — the pure matching-interest percent, no time
-// and no handshakes. Three closed criteria add 48, a full MatchV2 adds 52;
+// and no handshakes. Three closed criteria add 66, a full MatchV2 adds 34;
 // the result is rounded to 2 decimals and pinned into the open interval
 // (0, 100) — the summaries table CHECK constraint enforces it.
 func buildSummary(chat model.Chat, first, second string, matchV2 float64, in SummaryInput) (model.Summary, error) {
