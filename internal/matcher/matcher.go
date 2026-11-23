@@ -6,7 +6,9 @@
 //
 //  1. fetch every room with at least one active invite code (not revoked,
 //     not expired) — rooms host live events, the rest is idle;
-//  2. fetch the room's ACTIVE users (active = true, not deleted);
+//  2. fetch the room's ACTIVE users (active = true, not deleted) and
+//     check the room handshake cap: at 2/3 of the active user count the
+//     room is saturated and skipped (manual handshake sends stay open);
 //  3. build the PAIR POOL: every directed pair X -> Y of the active users
 //     with its match points from POST /api/match —
 //     100 * (1 - 1/2^(sqrt(t) * (1 + 3.522 * C))), the score computed AS
@@ -43,6 +45,14 @@ const (
 // pair, nine budget three, sixteen four).
 func pairBudget(activeUsers int) int {
 	return int(math.Sqrt(float64(activeUsers)))
+}
+
+// roomHandshakeCap caps the handshakes a room may hold in total at 2/3 of
+// its active user count, floored (three users cap at 2, nine at 6). At or
+// above the cap the auto-matcher skips the room — users can still send
+// handshakes by hand.
+func roomHandshakeCap(activeUsers int) int {
+	return 2 * activeUsers / 3
 }
 
 // Worker runs the auto-matchmaking job on its interval until ctx is done.
@@ -102,13 +112,27 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 }
 
 // matchRoom ranks every directed pair of one room's active users and sends
-// the top floor(sqrt(users)) handshakes.
+// the top floor(sqrt(users)) handshakes — unless the room already holds
+// its handshake cap (2/3 of the active user count).
 func (w *Worker) matchRoom(ctx context.Context, room model.Room) error {
 	users, err := w.db.ListActiveRoomUsers(ctx, room.Address)
 	if err != nil {
 		return err
 	}
 	if len(users) < 2 {
+		return nil
+	}
+
+	// Room handshake cap (feature #44): at 2/3 of the active user count
+	// the room is saturated — the auto-matcher skips it entirely (manual
+	// sends through the API stay available).
+	count, err := w.db.CountRoomHandshakes(ctx, room.Address)
+	if err != nil {
+		return err
+	}
+	if cap := roomHandshakeCap(len(users)); count >= cap {
+		w.log.Info("match worker room skipped: handshake cap",
+			"room", room.Address, "handshakes", count, "cap", cap)
 		return nil
 	}
 

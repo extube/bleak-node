@@ -199,6 +199,17 @@ func (d *DB) HandshakeExists(ctx context.Context, from, to string) (bool, error)
 	return found, err
 }
 
+// CountRoomHandshakes counts the USER-TO-USER directed handshakes of one
+// room: the system welcome handshakes (room -> user, the balance faucet)
+// are excluded. The auto-matcher's room cap reads this count.
+func (d *DB) CountRoomHandshakes(ctx context.Context, roomAddress string) (int, error) {
+	var n int
+	err := d.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM handshakes WHERE room = ? AND from_address != ?`,
+		roomAddress, roomAddress).Scan(&n)
+	return n, err
+}
+
 // findHandshakeOn runs the pair lookup on the given executor.
 func findHandshakeOn(ctx context.Context, q rowQuerier, from, to string) (model.Handshake, bool, error) {
 	row := q.QueryRowContext(ctx,
