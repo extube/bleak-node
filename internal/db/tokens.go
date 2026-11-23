@@ -88,7 +88,7 @@ func (d *DB) UserTokenHashByAddress(ctx context.Context, address string) (string
 // Bearer token.
 func (d *DB) UserByTokenHash(ctx context.Context, tokenHash string) (model.User, bool, error) {
 	rows, err := d.QueryContext(ctx,
-		`SELECT address, name, room, public_bio, private_bio, greeting, language, created_at, updated_at, deleted_at, token_hash
+		`SELECT address, name, room, public_bio, private_bio, greeting, language, active, created_at, updated_at, deleted_at, token_hash
 		 FROM users WHERE token_hash IS NOT NULL AND deleted_at IS NULL`)
 	if err != nil {
 		return model.User{}, false, err
@@ -96,19 +96,21 @@ func (d *DB) UserByTokenHash(ctx context.Context, tokenHash string) (model.User,
 	defer rows.Close()
 	for rows.Next() {
 		var (
-			u                          model.User
-			createdAt, updatedAt       string
-			deletedAt                  sql.NullString
-			tokenHashRow               sql.NullString
+			u                    model.User
+			createdAt, updatedAt string
+			deletedAt            sql.NullString
+			tokenHashRow         sql.NullString
+			active               int
 		)
 		if err := rows.Scan(&u.Address, &u.Name, &u.Room, &u.PublicBio, &u.PrivateBio,
-			&u.Greeting, &u.Language, &createdAt, &updatedAt, &deletedAt, &tokenHashRow); err != nil {
+			&u.Greeting, &u.Language, &active, &createdAt, &updatedAt, &deletedAt, &tokenHashRow); err != nil {
 			return model.User{}, false, err
 		}
 		if hashEquals(tokenHashRow.String, tokenHash) {
 			u.CreatedAt = parseTS(createdAt)
 			u.UpdatedAt = parseTS(updatedAt)
 			u.DeletedAt = parseNullTS(deletedAt)
+			u.Active = active == 1
 			return u, true, nil
 		}
 	}
@@ -204,10 +206,10 @@ func (d *DB) UserMutualCodeLive(ctx context.Context, roomAddress, address string
 // MutualHandshakeResult reports what POST /api/handshake/mutual did.
 type MutualHandshakeResult struct {
 	// AB is the scanner -> target handshake, BA the target -> scanner one.
-	AB, BA          model.Handshake
-	ABNew, BANew    bool
-	Chat            model.Chat
-	ChatFound       bool
+	AB, BA       model.Handshake
+	ABNew, BANew bool
+	Chat         model.Chat
+	ChatFound    bool
 }
 
 // ConsumeMutualCode verifies the scanned raw one-time code against the

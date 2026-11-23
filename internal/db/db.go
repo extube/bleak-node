@@ -80,6 +80,7 @@ CREATE TABLE IF NOT EXISTS users (
 	created_at  TEXT NOT NULL,
 	updated_at  TEXT NOT NULL,
 	deleted_at  TEXT,
+	active      INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
 	token_hash        TEXT,
 	mutual_code_hash  TEXT
 );
@@ -308,7 +309,13 @@ WHERE room = ''`); err != nil {
 	if err := d.ensureColumn(ctx, "users", "mutual_code_hash", "TEXT"); err != nil {
 		return err
 	}
-	return d.ensureColumn(ctx, "rooms", "token_hash", "TEXT")
+	if err := d.ensureColumn(ctx, "rooms", "token_hash", "TEXT"); err != nil {
+		return err
+	}
+	// Auto-matchmaking opt-out (feature #36): active users only enter the
+	// matching matrix. Older rows default to 1 (active), the same default
+	// every new user gets.
+	return d.ensureColumn(ctx, "users", "active", "INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1))")
 }
 
 // rebuildMessagesWithCap recreates the messages table when its content

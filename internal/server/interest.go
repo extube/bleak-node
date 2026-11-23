@@ -29,14 +29,13 @@ type DeleteInterestsRequest struct {
 	Keys []int `json:"keys" example:"1,2,3"`
 }
 
-// MatchRequest is the body for POST /api/match.
+// MatchRequest is the body for POST /api/match. It carries no time: the
+// formula's t is computed server-side as the hours since the FIRST
+// persona's creation (feature #36).
 type MatchRequest struct {
 	RoomAddress       string `json:"room_address" example:"0xroom123"`
 	FirstUserAddress  string `json:"first_user_address" example:"0xuser123"`
 	SecondUserAddress string `json:"second_user_address" example:"0xuser456"`
-	// Time is the formula's time in milliseconds; converted to the hours t
-	// of 50 + 50 * (1 / 2^t).
-	Time float64 `json:"time" example:"3600000"`
 }
 
 // AddUserInterests adds (upserts) many interests for a user.
@@ -149,7 +148,7 @@ func (s *Server) DeleteUserInterests(w http.ResponseWriter, r *http.Request) {
 // MatchPoints computes the matching score of two personas.
 //
 //	@Summary		matching score of two users
-//	@Description	Computes the matching points (0..100) of two personas inside one room: points = clamp(50 + 50 * (1 / 2^t) + coef, 0, 100) with t the hours (float) converted from the requested time (milliseconds). The coefficient adds +4 for a one-sided handshake between the two (one direction exists in the room), +2 per shared interest group and +5 per exact interest match (same group AND same key). A mutual handshake (both directions exist) returns 100 immediately. Requires the FIRST persona's Bearer token; both users must live in the room.
+//	@Description	Computes the matching points (0..100) of two personas inside one room: points = 100 * (1 - 1/(C * 2^t)) with t the hours (float) since the FIRST persona's creation (computed server-side; the request carries no time). C = 1 + handshake directions (+1 per directed handshake between the two in the room) + the matching-interest percent (2 * exact interest matches / the interests total of both personas; every match is the same group AND key, counted on both sides — identical interest sets grade a full 100 %). The score grows with the first persona's age toward 100. Requires the FIRST persona's Bearer token; both users must live in the room.
 //	@Tags			matching
 //	@Security		UserToken
 //	@Accept			json
@@ -175,10 +174,6 @@ func (s *Server) MatchPoints(w http.ResponseWriter, r *http.Request) {
 		respond(w, http.StatusBadRequest, "first_user_address and second_user_address must differ")
 		return
 	}
-	if req.Time < 0 {
-		respond(w, http.StatusBadRequest, "time must be >= 0")
-		return
-	}
 	// The score is computed AS the first persona: its token is required,
 	// scoped to the room both users must live in.
 	if !s.authUserToken(w, r, req.RoomAddress, req.FirstUserAddress) {
@@ -186,7 +181,7 @@ func (s *Server) MatchPoints(w http.ResponseWriter, r *http.Request) {
 	}
 
 	res, err := s.db.MatchPoints(r.Context(),
-		req.RoomAddress, req.FirstUserAddress, req.SecondUserAddress, req.Time)
+		req.RoomAddress, req.FirstUserAddress, req.SecondUserAddress)
 	if err != nil {
 		s.mapError(w, err)
 		return

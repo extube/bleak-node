@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"testing"
 )
@@ -30,10 +31,10 @@ func addTestInterests(t *testing.T, tsURL, room, address, token, rows string) []
 }
 
 // matchPoints posts /api/match and returns (status, decoded body).
-func matchPoints(t *testing.T, tsURL, room, first, second, token, time string) (int, map[string]any) {
+func matchPoints(t *testing.T, tsURL, room, first, second, token string) (int, map[string]any) {
 	t.Helper()
-	body := fmt.Sprintf(`{"room_address":%q,"first_user_address":%q,"second_user_address":%q,"time":%s}`,
-		room, first, second, time)
+	body := fmt.Sprintf(`{"room_address":%q,"first_user_address":%q,"second_user_address":%q}`,
+		room, first, second)
 	code, resp := doJSON(t, bearerReq(t, http.MethodPost, tsURL+"/api/match", token, body))
 	defer func() { _ = resp.Body.Close() }()
 	var out map[string]any
@@ -168,65 +169,77 @@ func TestMatchEndpoint(t *testing.T) {
 	alice, aliceToken := joinTestRoom(t, ts, room, invite, "Alice")
 	bob, bobToken := joinTestRoom(t, ts, room, invite, "Bob")
 
-	// t = 1h, no handshake, no interests: 75.
-	code, res := matchPoints(t, ts.URL, room, alice, bob, aliceToken, "3600000")
+	// t = 1h (the FIRST persona's age, computed server-side), no handshake,
+	// no interests: C = 1 -> 100 * (1 - 1/2) = 50.
+	backdateTestUser(t, database, alice, 1)
+	code, res := matchPoints(t, ts.URL, room, alice, bob, aliceToken)
 	if code != http.StatusOK {
 		t.Fatalf("match: %s %v", http.StatusText(code), res)
 	}
-	if res["points"].(float64) != 75 {
-		t.Fatalf("want 75, got %v (%v)", res["points"], res)
+	if math.Abs(res["points"].(float64)-50) > 0.05 {
+		t.Fatalf("want ~50, got %v (%v)", res["points"], res)
 	}
 
 	// Missing token: 401.
-	code, _ = matchPoints(t, ts.URL, room, alice, bob, "", "3600000")
+	code, _ = matchPoints(t, ts.URL, room, alice, bob, "")
 	if code != http.StatusUnauthorized {
 		t.Fatalf("no token: want 401, got %d", code)
 	}
 
 	// Wrong persona's token (bob's, addressed as alice): 403.
-	code, _ = matchPoints(t, ts.URL, room, alice, bob, bobToken, "3600000")
+	code, _ = matchPoints(t, ts.URL, room, alice, bob, bobToken)
 	if code != http.StatusForbidden {
 		t.Fatalf("wrong token: want 403, got %d", code)
 	}
 
-	// Same addresses: 400; negative time: 400; unknown user: 404.
-	code, _ = matchPoints(t, ts.URL, room, alice, alice, aliceToken, "0")
+	// Same addresses: 400; unknown user: 404.
+	code, _ = matchPoints(t, ts.URL, room, alice, alice, aliceToken)
 	if code != http.StatusBadRequest {
 		t.Fatalf("same address: want 400, got %d", code)
 	}
-	code, _ = matchPoints(t, ts.URL, room, alice, bob, aliceToken, "-1")
-	if code != http.StatusBadRequest {
-		t.Fatalf("negative time: want 400, got %d", code)
-	}
-	code, _ = matchPoints(t, ts.URL, room, alice, "0xunknown", aliceToken, "0")
+	code, _ = matchPoints(t, ts.URL, room, alice, "0xunknown", aliceToken)
 	if code != http.StatusNotFound {
 		t.Fatalf("unknown user: want 404, got %d", code)
 	}
 
-	// Shared group +2, exact match +5.
+	// The request no longer carries time (feature #36): an unknown field is
+	// rejected with 400.
+	code, resp := doJSON(t, bearerReq(t, http.MethodPost, ts.URL+"/api/match", aliceToken,
+		fmt.Sprintf(`{"room_address":%q,"first_user_address":%q,"second_user_address":%q,"time":0}`,
+			room, alice, bob)))
+	resp.Body.Close()
+	if code != http.StatusBadRequest {
+		t.Fatalf("legacy time field: want 400, got %d", code)
+	}
+
+	// Shared group alone moves nothing (the percent counts exact matches
+	// only), but the breakdown reports it.
 	addTestInterests(t, ts.URL, room, alice, aliceToken, `{"title":"Chess","group":1,"key":7}`)
 	addTestInterests(t, ts.URL, room, bob, bobToken, `{"title":"Go","group":1,"key":8}`)
-	_, res = matchPoints(t, ts.URL, room, alice, bob, aliceToken, "3600000")
-	if res["points"].(float64) != 77 || res["shared_groups"].(float64) != 1 {
-		t.Fatalf("shared group: want 77, got %v", res)
+	_, res = matchPoints(t, ts.URL, room, alice, bob, aliceToken)
+	if math.Abs(res["points"].(float64)-50) > 0.05 || res["shared_groups"].(float64) != 1 {
+		t.Fatalf("shared group: want ~50, got %v", res)
 	}
+
+	// Exact match: percent = 2*1/(1+2), C = 1 + 2/3 -> 70.
 	addTestInterests(t, ts.URL, room, bob, bobToken, `{"title":"Chess","group":1,"key":7}`)
-	_, res = matchPoints(t, ts.URL, room, alice, bob, aliceToken, "3600000")
-	if res["points"].(float64) != 82 || res["exact_interest_matches"].(float64) != 1 {
-		t.Fatalf("exact match: want 82, got %v", res)
+	_, res = matchPoints(t, ts.URL, room, alice, bob, aliceToken)
+	if math.Abs(res["points"].(float64)-70) > 0.05 || res["exact_interest_matches"].(float64) != 1 {
+		t.Fatalf("exact match: want ~70, got %v", res)
 	}
 
-	// One-sided handshake (+4; the balance comes from the welcome handshake).
+	// One-sided handshake (+1 direction; the balance comes from the welcome
+	// handshake): C = 1 + 1 + 2/3 -> 81.25.
 	sendTestHandshake(t, ts.URL, alice, aliceToken, bob)
-	_, res = matchPoints(t, ts.URL, room, alice, bob, aliceToken, "3600000")
-	if res["points"].(float64) != 86 || res["handshake"] != true {
-		t.Fatalf("one-sided handshake: want 86, got %v", res)
+	_, res = matchPoints(t, ts.URL, room, alice, bob, aliceToken)
+	if math.Abs(res["points"].(float64)-81.25) > 0.05 || res["handshake"] != true {
+		t.Fatalf("one-sided handshake: want ~81.25, got %v", res)
 	}
 
-	// Mutual handshake: instant 100, whatever the time.
+	// Mutual handshake: no instant 100 anymore — C = 1 + 2 + 2/3 -> 86.36.
 	sendTestHandshake(t, ts.URL, bob, bobToken, alice)
-	_, res = matchPoints(t, ts.URL, room, alice, bob, aliceToken, "360000000000000")
-	if res["points"].(float64) != 100 || res["mutual_handshake"] != true {
-		t.Fatalf("mutual handshake: want instant 100, got %v", res)
+	_, res = matchPoints(t, ts.URL, room, alice, bob, aliceToken)
+	if math.Abs(res["points"].(float64)-86.36) > 0.05 || res["mutual_handshake"] != true {
+		t.Fatalf("mutual handshake: want ~86.36, got %v", res)
 	}
 }

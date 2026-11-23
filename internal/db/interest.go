@@ -1,10 +1,14 @@
-// User interests and the matching score between two personas (feature #34).
+// User interests and the matching score between two personas.
 //
 // A persona declares a list of interests: each carries a title classified
 // by a numeric group (the category) and a numeric key (the concrete
-// interest). The matching score grades two users of one room on
-// [0, 100]: the time-decayed base plus an interest/handshake coefficient;
-// a mutual handshake is an instant 100.
+// interest). The matching score (feature #36 formula) grades two users of
+// one room on [0, 100]:
+//
+//	points = 100 * (1 - 1 / (C * 2^t))
+//
+// with t the hours since the FIRST persona's creation and C assembled from
+// the relations between the two (see MatchPoints).
 package db
 
 import (
@@ -20,27 +24,15 @@ import (
 	"github.com/extube/bleak-node/internal/model"
 )
 
-// Matching-score coefficients (feature #34). The final points are
-//
-//	points = clamp(50 + 50 * (1 / 2^t) + coef, 0, 100)
-//
-// with t the hours (float) computed from the requested time (milliseconds)
-// and coef assembled from the relations between the two personas:
-//
-//   - a one-sided handshake (one direction exists in the room): +4;
-//   - every shared interest group: +2;
-//   - every exact interest match (same group AND same key): +5.
-//
-// A mutual handshake (both directions) returns 100 immediately, whatever
-// the time and interests say.
+// Matching-score coefficients. The legacy formula (feature #34,
+// clamp(50 + 50 * (1/2^t) + coef)) is retired; the coefficients survive
+// only in the HARD match's calibrated soft score (db/match.go,
+// matchSoftOn) and may be retuned without contract changes.
 const (
 	CoefHandshake = 4
 	CoefSameGroup = 2
 	CoefSameKey   = 5
 )
-
-// millisPerHour converts the requested milliseconds into the formula's t.
-const millisPerHour = float64(time.Hour / time.Millisecond)
 
 // MatchResult is the response of the matching-score computation.
 type MatchResult struct {
@@ -220,21 +212,30 @@ type listQuerier interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
 }
 
-// MatchPoints computes the matching score of two personas inside one room.
-// Both users must live in the room (ErrNotFound otherwise); timeMs is the
-// formula's time in milliseconds (ErrInvalid when negative or when the two
-// addresses coincide). The score:
+// MatchPoints computes the matching score of two personas inside one room
+// (feature #36 formula). Both users must live in the room (ErrNotFound
+// otherwise) and differ (ErrInvalid). The score:
 //
-//	points = clamp(50 + 50 * (1 / 2^t) + coef, 0, 100),  t = timeMs hours
+//	points = 100 * (1 - 1 / (C * 2^t))
 //
-// where coef adds CoefHandshake per one-sided handshake, CoefSameGroup per
-// shared interest group and CoefSameKey per exact interest match. A mutual
-// handshake (both directions exist in the room) returns 100 immediately.
-func (d *DB) MatchPoints(ctx context.Context, roomAddress, first, second string, timeMs float64) (MatchResult, error) {
+// with t the hours (float) since the FIRST persona's creation — the user
+// the score is "for" (the auto-match matrix row) — and C the relation
+// coefficient:
+//
+//		C = 1 + handshake directions + interest percent
+//
+//	  - handshake directions: +1 per directed handshake between the two in
+//	    the room (0, 1 or 2);
+//	  - interest percent: 2 * exact interest matches / (interests of the
+//	    first + interests of the second) — every match (same group AND key)
+//	    counts on both sides, so two identical interest sets grade a full
+//	    100 % percent.
+//
+// A mutual handshake is no longer an instant 100: it raises C, and the
+// score grows with the personas' age toward 100. The result is clamped
+// into [0, 100] and rounded to 2 decimals.
+func (d *DB) MatchPoints(ctx context.Context, roomAddress, first, second string) (MatchResult, error) {
 	var res MatchResult
-	if timeMs < 0 {
-		return res, errors.Join(ErrInvalid, errors.New("time must be >= 0"))
-	}
 	if first == second {
 		return res, errors.Join(ErrInvalid, errors.New("first_user_address and second_user_address must differ"))
 	}
@@ -248,15 +249,23 @@ func (d *DB) MatchPoints(ctx context.Context, roomAddress, first, second string,
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	for _, addr := range []string{first, second} {
-		ok, err := d.userInRoomOn(ctx, tx, roomAddress, addr)
-		if err != nil {
-			return res, err
-		}
-		if !ok {
-			return res, errors.Join(ErrNotFound,
-				fmt.Errorf("user %q not found in room %q", addr, roomAddress))
-		}
+	// The FIRST persona's creation stamps the formula's t.
+	var createdFirst string
+	err = tx.QueryRowContext(ctx,
+		`SELECT created_at FROM users WHERE address = ? AND room = ? AND deleted_at IS NULL`,
+		first, roomAddress).Scan(&createdFirst)
+	if errors.Is(err, sql.ErrNoRows) {
+		return res, errors.Join(ErrNotFound,
+			fmt.Errorf("user %q not found in room %q", first, roomAddress))
+	}
+	if err != nil {
+		return res, err
+	}
+	if ok, err := d.userInRoomOn(ctx, tx, roomAddress, second); err != nil {
+		return res, err
+	} else if !ok {
+		return res, errors.Join(ErrNotFound,
+			fmt.Errorf("user %q not found in room %q", second, roomAddress))
 	}
 
 	// Handshake state between the two personas within the room.
@@ -272,50 +281,32 @@ func (d *DB) MatchPoints(ctx context.Context, roomAddress, first, second string,
 	}
 	res.Handshake = directions > 0
 	res.MutualHandshake = directions == 2
-	if res.MutualHandshake {
-		// Mutual handshake: instant full score, nothing else weighs in.
-		res.Points = 100
-		return res, tx.Commit()
-	}
 
 	// Interests of both personas: exact matches (same group AND key) and
 	// shared groups (the group appears on both sides).
-	interestsA, err := listInterestsOn(ctx, tx, first)
+	var interestsA, interestsB []model.Interest
+	interestsA, interestsB, res, err = interestOverlapOn(ctx, tx, res, first, second)
 	if err != nil {
 		return res, err
 	}
-	interestsB, err := listInterestsOn(ctx, tx, second)
-	if err != nil {
-		return res, err
+
+	// C: base 1 (keeps the denominator non-zero) + handshake directions +
+	// the matching-interest percent (matches count on both sides).
+	totalInterests := len(interestsA) + len(interestsB)
+	percent := 0.0
+	if totalInterests > 0 {
+		percent = 2 * float64(res.ExactMatches) / float64(totalInterests)
 	}
-	byKeyA := make(map[int]model.Interest, len(interestsA))
-	groupsA := make(map[int]struct{}, len(interestsA))
-	for _, in := range interestsA {
-		byKeyA[in.Key] = in
-		groupsA[in.Group] = struct{}{}
-	}
-	groupsB := make(map[int]struct{}, len(interestsB))
-	for _, in := range interestsB {
-		groupsB[in.Group] = struct{}{}
-		if a, ok := byKeyA[in.Key]; ok && a.Group == in.Group {
-			res.ExactMatches++
-		}
-	}
-	for g := range groupsA {
-		if _, ok := groupsB[g]; ok {
-			res.SharedGroups++
-		}
+	c := 1 + float64(directions) + percent
+
+	// t: hours since the first persona's creation (never negative — a
+	// future-created row is treated as brand new).
+	t := time.Since(parseTS(createdFirst)).Hours()
+	if t < 0 {
+		t = 0
 	}
 
-	coef := 0
-	if res.Handshake {
-		coef += CoefHandshake
-	}
-	coef += CoefSameGroup * res.SharedGroups
-	coef += CoefSameKey * res.ExactMatches
-
-	t := timeMs / millisPerHour
-	res.Points = 50 + 50*math.Pow(0.5, t) + float64(coef)
+	res.Points = 100 * (1 - 1/(c*math.Pow(2, t)))
 	// Clamp into [0, 100]; round to 2 decimals so clients see clean numbers.
 	res.Points = math.Max(0, math.Min(100, res.Points))
 	res.Points = math.Round(res.Points*100) / 100

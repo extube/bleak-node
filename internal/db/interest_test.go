@@ -6,6 +6,7 @@ import (
 	"math"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/extube/bleak-node/internal/model"
 )
@@ -106,14 +107,26 @@ func TestInterestValidation(t *testing.T) {
 	if _, _, err := db.DeleteUserInterests(ctx, room, bob, []int{}); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("empty keys must be ErrInvalid, got %v", err)
 	}
-	if _, err := db.MatchPoints(ctx, room, alice, alice, 0); !errors.Is(err, ErrInvalid) {
+	if _, err := db.MatchPoints(ctx, room, alice, alice); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("same addresses must be ErrInvalid, got %v", err)
 	}
-	if _, err := db.MatchPoints(ctx, room, alice, bob, -1); !errors.Is(err, ErrInvalid) {
-		t.Fatalf("negative time must be ErrInvalid, got %v", err)
-	}
-	if _, err := db.MatchPoints(ctx, room, alice, "0xunknown", 0); !errors.Is(err, ErrNotFound) {
+	if _, err := db.MatchPoints(ctx, room, alice, "0xunknown"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("unknown match user must be ErrNotFound, got %v", err)
+	}
+	if _, err := db.MatchPoints(ctx, room, "0xunknown", bob); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown first match user must be ErrNotFound, got %v", err)
+	}
+}
+
+// backdateUser sets a user's created_at to now - hours (the formula's t is
+// read from that column).
+func backdateUser(t *testing.T, db *DB, address string, hours float64) {
+	t.Helper()
+	created := time.Now().UTC().Add(-time.Duration(hours * float64(time.Hour)))
+	if _, err := db.ExecContext(context.Background(),
+		`UPDATE users SET created_at = ? WHERE address = ?`,
+		created.Format(time.RFC3339), address); err != nil {
+		t.Fatalf("backdate user: %v", err)
 	}
 }
 
@@ -122,121 +135,113 @@ func TestMatchPointsFormula(t *testing.T) {
 	ctx := context.Background()
 	room, alice, bob := seedInterestUsers(t, db)
 
-	// t = 1h, no handshake, no interests: 50 + 50 * 0.5 = 75.
-	res, err := db.MatchPoints(ctx, room, alice, bob, 3_600_000)
+	// Brand-new personas (t ~ 0), no handshake, no interests: C = 1 and
+	// points = 100 * (1 - 1/(1 * 2^t)) ~ 0.
+	res, err := db.MatchPoints(ctx, room, alice, bob)
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
-	if res.Points != 75 {
-		t.Fatalf("want 75, got %v (%+v)", res.Points, res)
+	if res.Points < 0 || res.Points > 0.1 {
+		t.Fatalf("fresh pair must score ~0, got %v (%+v)", res.Points, res)
 	}
 	if res.MutualHandshake || res.Handshake || res.ExactMatches != 0 || res.SharedGroups != 0 {
 		t.Fatalf("unexpected breakdown: %+v", res)
 	}
 
-	// Shared group only: 75 + 2 = 77.
+	// t = 1h (the FIRST persona's age), still no relations: C = 1 gives
+	// 100 * (1 - 1/2) = 50.
+	backdateUser(t, db, alice, 1)
+	res, err = db.MatchPoints(ctx, room, alice, bob)
+	if err != nil {
+		t.Fatalf("match: %v", err)
+	}
+	if math.Abs(res.Points-50) > 0.05 {
+		t.Fatalf("t=1h C=1: want ~50, got %v (%+v)", res.Points, res)
+	}
+
+	// Shared group only: the percent counts exact matches alone, so the
+	// score stays 50 — the group is reported in the breakdown.
 	if _, err := db.AddUserInterests(ctx, room, alice, []model.Interest{{Title: "Chess", Group: 1, Key: 7}}); err != nil {
 		t.Fatalf("add A: %v", err)
 	}
 	if _, err := db.AddUserInterests(ctx, room, bob, []model.Interest{{Title: "Go", Group: 1, Key: 8}}); err != nil {
 		t.Fatalf("add B: %v", err)
 	}
-	res, err = db.MatchPoints(ctx, room, alice, bob, 3_600_000)
+	res, err = db.MatchPoints(ctx, room, alice, bob)
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
-	if res.Points != 77 || res.SharedGroups != 1 || res.ExactMatches != 0 {
-		t.Fatalf("shared group: want 77, got %v (%+v)", res.Points, res)
+	if math.Abs(res.Points-50) > 0.05 || res.SharedGroups != 1 || res.ExactMatches != 0 {
+		t.Fatalf("shared group: want ~50 with 1 group, got %v (%+v)", res.Points, res)
 	}
 
-	// Exact match (same group AND key): 75 + 2 + 5 = 82.
+	// Exact match (same group AND key): percent = 2*1/(1+2) = 2/3,
+	// C = 1 + 2/3 -> 100 * (1 - 1/(1.6667 * 2)) = 70.
 	if _, err := db.AddUserInterests(ctx, room, bob, []model.Interest{{Title: "Chess", Group: 1, Key: 7}}); err != nil {
 		t.Fatalf("add B exact: %v", err)
 	}
-	res, err = db.MatchPoints(ctx, room, alice, bob, 3_600_000)
+	res, err = db.MatchPoints(ctx, room, alice, bob)
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
-	if res.Points != 82 || res.ExactMatches != 1 || res.SharedGroups != 1 {
-		t.Fatalf("exact match: want 82, got %v (%+v)", res.Points, res)
+	if math.Abs(res.Points-70) > 0.05 || res.ExactMatches != 1 || res.SharedGroups != 1 {
+		t.Fatalf("exact match: want ~70, got %v (%+v)", res.Points, res)
 	}
 
-	// Zero time decays to the full base (100): the clamp holds at 100 even
-	// with the interest coefficient on top.
-	res, err = db.MatchPoints(ctx, room, alice, bob, 0)
-	if err != nil {
-		t.Fatalf("match: %v", err)
-	}
-	if res.Points != 100 {
-		t.Fatalf("t=0 must clamp to 100, got %v", res.Points)
-	}
-
-	// Very long time: the base decays to 50, the interest coefficient
-	// keeps 50 + 2 + 5 = 57.
-	res, err = db.MatchPoints(ctx, room, alice, bob, 360_000_000_000_000)
-	if err != nil {
-		t.Fatalf("match: %v", err)
-	}
-	if res.Points != 57 {
-		t.Fatalf("long time: want 57, got %v", res.Points)
-	}
-
-	// One-sided handshake: +4 (the directions are in the room).
+	// One-sided handshake: +1 direction, C = 1 + 1 + 2/3 -> 81.25.
 	if _, err := db.CreateHandshake(ctx, &model.Handshake{
 		FromAddress: alice, ToAddress: bob, Status: model.DefaultStatus,
 	}); err != nil {
 		t.Fatalf("handshake: %v", err)
 	}
-	res, err = db.MatchPoints(ctx, room, alice, bob, 3_600_000)
+	res, err = db.MatchPoints(ctx, room, alice, bob)
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
-	if !res.Handshake || res.MutualHandshake {
-		t.Fatalf("unexpected handshake flags: %+v", res)
-	}
-	if res.Points != 86 {
-		t.Fatalf("one-sided handshake: want 86, got %v", res.Points)
+	if math.Abs(res.Points-81.25) > 0.05 || !res.Handshake || res.MutualHandshake {
+		t.Fatalf("one-sided handshake: want ~81.25, got %v (%+v)", res.Points, res)
 	}
 
-	// Mutual handshake: instant 100, whatever the time.
+	// Mutual handshake: no instant 100 anymore — +1 more direction,
+	// C = 1 + 2 + 2/3 -> 100 * (1 - 1/(3.6667 * 2)) = 86.36.
 	if _, err := db.CreateHandshake(ctx, &model.Handshake{
 		FromAddress: bob, ToAddress: alice, Status: model.DefaultStatus,
 	}); err != nil {
 		t.Fatalf("handshake back: %v", err)
 	}
-	res, err = db.MatchPoints(ctx, room, alice, bob, 360_000_000_000) // 100h
+	res, err = db.MatchPoints(ctx, room, alice, bob)
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
-	if res.Points != 100 || !res.MutualHandshake {
-		t.Fatalf("mutual handshake: want instant 100, got %v (%+v)", res.Points, res)
+	if math.Abs(res.Points-86.36) > 0.05 || !res.MutualHandshake {
+		t.Fatalf("mutual handshake: want ~86.36, got %v (%+v)", res.Points, res)
 	}
 }
 
-func TestMatchPointsClamp(t *testing.T) {
+func TestMatchPointsAgeSaturation(t *testing.T) {
 	db := interestTestDB(t)
 	ctx := context.Background()
 	room, alice, bob := seedInterestUsers(t, db)
 
-	// Many exact matches + shared groups + handshake push the raw value far
-	// above 100: the clamp holds it at 100.
-	for k := 0; k < 30; k++ {
-		if _, err := db.AddUserInterests(ctx, room, alice, []model.Interest{{Title: "A", Group: k, Key: k}}); err != nil {
-			t.Fatalf("add A: %v", err)
-		}
-		if _, err := db.AddUserInterests(ctx, room, bob, []model.Interest{{Title: "B", Group: k, Key: k}}); err != nil {
-			t.Fatalf("add B: %v", err)
-		}
-	}
-	res, err := db.MatchPoints(ctx, room, alice, bob, 3_600_000)
+	// The age term saturates: after a long time even C = 1 saturates the
+	// formula at 100 (2^t overflows the denominator away).
+	backdateUser(t, db, alice, 4000)
+	res, err := db.MatchPoints(ctx, room, alice, bob)
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
-	if math.Round(res.Points) != 100 {
-		t.Fatalf("clamp: want 100, got %v", res.Points)
+	if res.Points != 100 {
+		t.Fatalf("old persona: want 100, got %v", res.Points)
 	}
-	if res.ExactMatches != 30 || res.SharedGroups != 30 {
-		t.Fatalf("breakdown: %+v", res)
+
+	// The younger side's age does not matter: t comes from the FIRST user
+	// only, so the mirrored call with a fresh first user scores ~0 again.
+	res, err = db.MatchPoints(ctx, room, bob, alice)
+	if err != nil {
+		t.Fatalf("match: %v", err)
+	}
+	if res.Points > 0.1 {
+		t.Fatalf("mirrored call must use the first user's age, got %v", res.Points)
 	}
 }
 

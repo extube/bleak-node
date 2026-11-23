@@ -59,12 +59,11 @@ func (s *Server) WithSummarizer(summarizer ChatSummarizer) *Server {
 	return s
 }
 
-// MatchPointsV2 computes the time-independent matching score of two
-// personas: the same pair always grades to the same points, which stay
-// strictly inside (0, 100) - 0 and 100 are impossible.
+// MatchPointsV2 computes the matching-interest percent of two personas:
+// the pure interest overlap, no time and no handshake input.
 //
-//	@Summary		time-independent matching score of two users
-//	@Description	Computes the matching points of two personas inside one room WITHOUT any time input: points = 50 + 50 * tanh(coef / 12), where the coefficient adds +4 per handshake direction (a mutual pair counts both directions - there is no instant 100), +2 per shared interest group and +5 per exact interest match (same group AND same key). The score is always strictly inside (0, 100): 0 and 100 are impossible, and the same pair always grades to the same value. Difficulty calibration: a FULL match (> 80) is rare - a mutual handshake alone stays below the line (79.14) and only pairs with real shared interests cross it, so roughly one of five random pairs reaches the zone. Requires the FIRST persona's Bearer token; both users must live in the room.
+//	@Summary		matching-interest percent of two users
+//	@Description	Computes the matching points of two personas inside one room as the pure matching-interest percent: points = 100 * 2 * exact_interest_matches / (total interests of the first + total interests of the second), where an exact match is the same group AND key counted on both sides. Two personas with identical interest sets grade 100, pairs with nothing shared grade 0; time and handshakes weigh nothing, so the same interest sets always grade the same. The handshake flags of the response stay informational. Requires the FIRST persona's Bearer token; both users must live in the room.
 //	@Tags			matching
 //	@Security		UserToken
 //	@Accept			json

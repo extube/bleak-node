@@ -72,7 +72,7 @@ func (d *DB) HardMatch(ctx context.Context, roomAddress, first, second string, s
 	// requires both directions), so handshake points would be a constant
 	// +8 on every summary. The soft score entering the merge is driven by
 	// shared interests alone; countHandshakes=false.
-	soft, err := matchPointsV2On(ctx, tx, roomAddress, first, second, false)
+	soft, err := matchSoftOn(ctx, tx, roomAddress, first, second, false)
 	if err != nil {
 		return model.Summary{}, false, err
 	}

@@ -86,14 +86,14 @@ func TestMatchV2Endpoint(t *testing.T) {
 		t.Fatalf("bad token: want 401, got %d", code)
 	}
 
-	// Mutual pair: the score sits inside the open interval, never 0/100.
+	// Mutual pair with no interests: the pure interest percent is 0; the
+	// handshake flags stay informational.
 	code, res := matchV2(t, ts.URL, room, alice, bob, aliceToken)
 	if code != http.StatusOK {
 		t.Fatalf("match v2: %s", http.StatusText(code))
 	}
-	points, ok := res["points"].(float64)
-	if !ok || points <= 0 || points >= 100 {
-		t.Fatalf("points must sit strictly inside (0,100), got %v", res["points"])
+	if res["points"].(float64) != 0 {
+		t.Fatalf("no interests must grade 0, got %v", res["points"])
 	}
 	if res["mutual_handshake"] != true {
 		t.Fatalf("mutual handshake flag: %v", res["mutual_handshake"])

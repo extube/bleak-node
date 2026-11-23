@@ -143,12 +143,11 @@ until implemented (kept in sync with the ledger in bleak-web's
   2026-11-16).
 - [x] **Native invite codes (join gate)** — implemented (§7.2,
   2026-11-16); supersedes bleak-web's helper-side code→address mapping.
-- [ ] **Auto-matchmaking score mechanic** — agents scan the room and rank the
-  most relevant users; every user has a **score**; an incoming handshake
-  raises the score; each iteration every user gains score by a personal
-  coefficient (derived from matched hobbies / hobby groups / topics); when a
-  user reaches threshold **N**, their agent automatically sends a handshake.
-  Requires the interests field first (now present, §7.4).
+- [x] **Auto-matchmaking score mechanic** — implemented as the match worker
+  (§7.6, feature #36, 2026-11-23): a simpler owner-directed variant of the
+  earlier sketch — every 10 minutes the active personas of every room with
+  a live invite code are ranked by the match score and the top-3
+  handshakes are sent automatically.
 - [x] **Interests on the user profile + matching score** — implemented
   (§7.4, feature #34, 2026-11-17): the `interests` table
   (user_address, title, group, key), bulk add/delete under the persona's
@@ -446,6 +445,58 @@ summarized once-only hard match and a one-way contact exchange.
   pair. `POST /api/contact` (FROM persona's token; repeated share = 409),
   `GET /api/contact/{address}` (ONLY the recipient's token lists the
   contacts shared with them).
+
+### 7.6 User active flag, match worker, new match formulas — ✅ DECIDED (owner directive, 2026-11-23), implemented (feature #36)
+
+**Context.** Four owner directives: an `active` flag on personas, a
+background worker that matches personas automatically, and new formulas
+for both match methods.
+
+**Decisions.**
+
+- **`users.active` (default true).** Every new persona is created active;
+  `PUT /api/room/{room}/user/{address}` accepts `active` to opt a persona
+  in or out. Inactive personas are invisible to the match worker (they
+  neither receive nor send automatic handshakes); everything else (chats,
+  messages, manual handshakes) is unaffected.
+- **Match worker (`internal/matcher`).** One job every 10 minutes
+  (`BLEAK_NODE_MATCHER=0` disables):
+  1. fetch every non-deleted room holding at least one active invite code
+     (not revoked, not expired) — live events only;
+  2. fetch the room's active users;
+  3. build the matching-point matrix: for every active user X the score
+     against every other active user Y, computed by the match-point
+     function of `POST /api/match` (t is read from X's `created_at`);
+  4. for every X: skip the users X already shook hands with (a repeated
+     directed pair is a no-op), order the rest by points (address breaks
+     ties) and send the handshake X → Y for the **top 3**.
+  Sending goes through the regular handshake path: idempotent per
+  directed pair, the room's **income > outcome rule applies** (a blocked
+  send is logged and skipped), and a completed mutual pair auto-creates
+  the chat as usual.
+- **Match (legacy `POST /api/match`) — new formula (owner directive):**
+  `points = 100 * (1 - 1/(C * 2^t))` with `t` the hours (float) since the
+  **FIRST persona's creation** (computed server-side; the request no
+  longer carries `time`) and `C = 1 + handshake directions + interest
+  percent`: +1 per directed handshake between the two in the room (0, 1
+  or 2), and the matching-interest percent `2 * exact_matches /
+  (interests_first + interests_second)` — every exact match (same group
+  AND key) counts on both sides, so identical interest sets grade a full
+  100 % percent. A mutual handshake is **no longer an instant 100**; the
+  score grows with the first persona's age toward 100.
+- **Match v2 (`POST /api/match/v2`) — new formula (owner directive):**
+  the pure matching-interest percent, `points = 100 * 2 * exact_matches /
+  (interests_first + interests_second)` — no time and no handshake
+  component; identical sets grade 100, nothing shared grades 0. The
+  `handshake`/`mutual_handshake` response flags stay informational.
+- **Hard match unchanged.** The hard match's calibrated soft component
+  (`50 + 50·tanh(coef/12)`, feature #35 difficulty tuning) is kept
+  internally — only the public v2 endpoint switched to the percent, so
+  the documented full-match scarcity of `/api/hard-match` is preserved.
+
+**Consequences for clients:** `/api/match` requests drop the `time`
+field (server-side t); `model.User` gains `active` (always present);
+match v2 can now return exactly 0 and 100.
 
 ---
 

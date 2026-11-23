@@ -9,72 +9,69 @@ import (
 	"github.com/extube/bleak-node/internal/model"
 )
 
-func TestMatchPointsV2OpenInterval(t *testing.T) {
+func TestMatchPointsV2InterestPercent(t *testing.T) {
 	d := openTestDB(t)
 	seedPairFixture(t, d, "0xchat")
 	ctx := context.Background()
 
-	// No relations at all: the neutral midpoint.
+	// No interests at all: 0 (the empty percent).
 	res, err := d.MatchPointsV2(ctx, "0xroom", "0xa", "0xb")
 	if err != nil {
 		t.Fatalf("match v2: %v", err)
 	}
-	if res.Points != 50 {
-		t.Fatalf("neutral score: want 50, got %v", res.Points)
+	if res.Points != 0 {
+		t.Fatalf("empty percent: want 0, got %v", res.Points)
 	}
 
-	// A one-sided handshake lifts the score, still inside the interval.
-	if _, err := d.ExecContext(ctx,
-		`INSERT INTO handshakes (tx_id, from_address, to_address, room, status, value, created_at)
-		 VALUES ('0xtx1', '0xa', '0xb', '0xroom', 1, 1, ?)`, time.Now().UTC().Format(time.RFC3339)); err != nil {
-		t.Fatalf("seed handshake: %v", err)
-	}
-	res, err = d.MatchPointsV2(ctx, "0xroom", "0xa", "0xb")
-	if err != nil {
-		t.Fatalf("match v2: %v", err)
-	}
-	// coef 4: 50 + 50 * tanh(4/12) = 66.08.
-	if res.Points != 66.08 {
-		t.Fatalf("handshake score: want 66.08, got %v", res.Points)
-	}
-	if !res.Handshake || res.MutualHandshake {
-		t.Fatalf("handshake flags wrong: %+v", res)
-	}
-
-	// Extreme relations (mutual handshake + many exact matches) never touch
-	// the endpoints: 0 and 100 are impossible.
-	for i := 0; i < 30; i++ {
+	// Identical interest sets: every match counts on both sides, so
+	// 2 * 2 / (2 + 2) = 1 -> 100 points.
+	for _, key := range []int{7, 8} {
 		for _, addr := range []string{"0xa", "0xb"} {
-			if _, err := d.ExecContext(ctx,
-				`INSERT INTO interests (user_address, title, "group", "key") VALUES (?, ?, 1, ?)`,
-				addr, "x", i); err != nil {
-				t.Fatalf("seed interest: %v", err)
+			if _, err := d.AddUserInterests(ctx, "0xroom", addr,
+				[]model.Interest{{Title: "Chess", Group: 1, Key: key}}); err != nil {
+				t.Fatalf("add interests: %v", err)
 			}
 		}
 	}
-	if _, err := d.ExecContext(ctx,
-		`INSERT INTO handshakes (tx_id, from_address, to_address, room, status, value, created_at)
-		 VALUES ('0xtx2', '0xb', '0xa', '0xroom', 1, 1, ?)`, time.Now().UTC().Format(time.RFC3339)); err != nil {
-		t.Fatalf("seed handshake: %v", err)
+	res, err = d.MatchPointsV2(ctx, "0xroom", "0xa", "0xb")
+	if err != nil {
+		t.Fatalf("match v2: %v", err)
+	}
+	if res.Points != 100 || res.ExactMatches != 2 {
+		t.Fatalf("identical sets: want 100, got %v (%+v)", res.Points, res)
+	}
+
+	// Partial overlap: A {7, 8}, B {7} -> 2 * 1 / (2 + 1) -> 66.67.
+	if _, _, err := d.DeleteUserInterests(ctx, "0xroom", "0xb", []int{8}); err != nil {
+		t.Fatalf("delete interests: %v", err)
 	}
 	res, err = d.MatchPointsV2(ctx, "0xroom", "0xa", "0xb")
 	if err != nil {
 		t.Fatalf("match v2: %v", err)
 	}
-	if res.Points <= 0 || res.Points >= 100 {
-		t.Fatalf("extreme score left the open interval: %v", res.Points)
+	if res.Points != 66.67 || res.ExactMatches != 1 {
+		t.Fatalf("partial overlap: want 66.67, got %v (%+v)", res.Points, res)
 	}
-	if res.Points != 99.99 {
-		t.Fatalf("extreme score: want the 99.99 ceiling, got %v", res.Points)
+
+	// Same group, different keys: an interest itself does not match, so
+	// the percent is 0 again (the shared group stays in the breakdown).
+	if _, _, err := d.DeleteUserInterests(ctx, "0xroom", "0xb", []int{7}); err != nil {
+		t.Fatalf("delete interests: %v", err)
 	}
-	if !res.MutualHandshake {
-		t.Fatalf("mutual handshake flag wrong: %+v", res)
+	if _, err := d.AddUserInterests(ctx, "0xroom", "0xb",
+		[]model.Interest{{Title: "Go", Group: 1, Key: 9}}); err != nil {
+		t.Fatalf("add interests: %v", err)
+	}
+	res, err = d.MatchPointsV2(ctx, "0xroom", "0xa", "0xb")
+	if err != nil {
+		t.Fatalf("match v2: %v", err)
+	}
+	if res.Points != 0 || res.SharedGroups != 1 || res.ExactMatches != 0 {
+		t.Fatalf("group-only overlap: want 0, got %v (%+v)", res.Points, res)
 	}
 }
 
-func TestMatchPointsV2NoFullMatchFromHandshakeAlone(t *testing.T) {
-	// Difficulty calibration: a mutual handshake without shared interests
-	// (coef 8) must stay BELOW the 80 full-match line (79.14).
+func TestMatchPointsV2HandshakesAreInformational(t *testing.T) {
 	d := openTestDB(t)
 	seedPairFixture(t, d, "0xchat")
 	ctx := context.Background()
@@ -89,21 +86,23 @@ func TestMatchPointsV2NoFullMatchFromHandshakeAlone(t *testing.T) {
 			t.Fatalf("seed handshake: %v", err)
 		}
 	}
+
+	// Handshakes weigh NOTHING: even a mutual pair with no interests stays
+	// at 0 (the flags stay informational).
 	res, err := d.MatchPointsV2(ctx, "0xroom", "0xa", "0xb")
 	if err != nil {
 		t.Fatalf("match v2: %v", err)
 	}
-	if res.Points != 79.14 {
-		t.Fatalf("mutual-only score: want 79.14, got %v", res.Points)
+	if res.Points != 0 || !res.MutualHandshake || !res.Handshake {
+		t.Fatalf("mutual handshake must not change the score: %+v", res)
 	}
 }
 
-func TestMatchPointsV2TimeIndependentAndStable(t *testing.T) {
+func TestMatchPointsV2Stable(t *testing.T) {
 	d := openTestDB(t)
 	seedPairFixture(t, d, "0xchat")
 	ctx := context.Background()
 
-	// One exact interest match (coef 5) plus a shared group (coef 2).
 	for _, addr := range []string{"0xa", "0xb"} {
 		if _, err := d.AddUserInterests(ctx, "0xroom", addr,
 			[]model.Interest{{Title: "Chess", Group: 1, Key: 7}}); err != nil {
@@ -114,9 +113,8 @@ func TestMatchPointsV2TimeIndependentAndStable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("match v2: %v", err)
 	}
-	// coef 7: 50 + 50 * tanh(7/12) = 76.25.
-	if first.Points != 76.25 {
-		t.Fatalf("interest score: want 76.25, got %v", first.Points)
+	if first.Points != 100 {
+		t.Fatalf("identical single interests: want 100, got %v", first.Points)
 	}
 	second, err := d.MatchPointsV2(ctx, "0xroom", "0xa", "0xb")
 	if err != nil {

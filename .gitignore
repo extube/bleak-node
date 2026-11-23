@@ -21,3 +21,4 @@ coverage.*
 
 # Local environment (use .env.example as template)
 .env
+data/

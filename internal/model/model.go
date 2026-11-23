@@ -18,17 +18,23 @@ type Room struct {
 
 // User is a person linked to a room. The user language is inherited from
 // the room and defines the language of the greeting (hello) message.
+// Active marks the persona as available for the auto-matchmaking worker
+// (feature #36): only active users enter the matching matrix and receive
+// automatic handshakes.
 type User struct {
-	Address    string     `json:"address" example:"0xuser123"`
-	Name       string     `json:"name" example:"Alice"`
-	Room       string     `json:"room" example:"0xroom123"`
-	PublicBio  string     `json:"public_bio" example:"public hello"`
-	PrivateBio string     `json:"private_bio" example:"real me"`
-	Greeting   string     `json:"greeting" example:"Hi, I'm Alice — I paint watercolor postcards."`
-	Language   string     `json:"language" example:"en"`
-	CreatedAt  time.Time  `json:"created_at"`
-	UpdatedAt  time.Time  `json:"updated_at"`
-	DeletedAt  *time.Time `json:"deleted_at"`
+	Address    string `json:"address" example:"0xuser123"`
+	Name       string `json:"name" example:"Alice"`
+	Room       string `json:"room" example:"0xroom123"`
+	PublicBio  string `json:"public_bio" example:"public hello"`
+	PrivateBio string `json:"private_bio" example:"real me"`
+	Greeting   string `json:"greeting" example:"Hi, I'm Alice — I paint watercolor postcards."`
+	Language   string `json:"language" example:"en"`
+	// Active users are matched by the auto-matchmaking worker; the flag is
+	// true by default and togglable via the user update endpoint.
+	Active    bool       `json:"active" example:"true"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
+	DeletedAt *time.Time `json:"deleted_at"`
 	// MutualCodeLive reports whether a one-time mutual code is registered
 	// for the persona (derived from the stored hash, never stored itself).
 	// It is set ONLY on token-authenticated reads of the persona; public

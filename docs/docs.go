@@ -679,7 +679,7 @@ const docTemplate = `{
                         "UserToken": []
                     }
                 ],
-                "description": "Computes the matching points (0..100) of two personas inside one room: points = clamp(50 + 50 * (1 / 2^t) + coef, 0, 100) with t the hours (float) converted from the requested time (milliseconds). The coefficient adds +4 for a one-sided handshake between the two (one direction exists in the room), +2 per shared interest group and +5 per exact interest match (same group AND same key). A mutual handshake (both directions exist) returns 100 immediately. Requires the FIRST persona's Bearer token; both users must live in the room.",
+                "description": "Computes the matching points (0..100) of two personas inside one room: points = 100 * (1 - 1/(C * 2^t)) with t the hours (float) since the FIRST persona's creation (computed server-side; the request carries no time). C = 1 + handshake directions (+1 per directed handshake between the two in the room) + the matching-interest percent (2 * exact interest matches / the interests total of both personas; every match is the same group AND key, counted on both sides — identical interest sets grade a full 100 %). The score grows with the first persona's age toward 100. Requires the FIRST persona's Bearer token; both users must live in the room.",
                 "consumes": [
                     "application/json"
                 ],
@@ -742,7 +742,7 @@ const docTemplate = `{
                         "UserToken": []
                     }
                 ],
-                "description": "Computes the matching points of two personas inside one room WITHOUT any time input: points = 50 + 50 * tanh(coef / 12), where the coefficient adds +4 per handshake direction (a mutual pair counts both directions - there is no instant 100), +2 per shared interest group and +5 per exact interest match (same group AND same key). The score is always strictly inside (0, 100): 0 and 100 are impossible, and the same pair always grades to the same value. Difficulty calibration: a FULL match (\u003e 80) is rare - a mutual handshake alone stays below the line (79.14) and only pairs with real shared interests cross it, so roughly one of five random pairs reaches the zone. Requires the FIRST persona's Bearer token; both users must live in the room.",
+                "description": "Computes the matching points of two personas inside one room as the pure matching-interest percent: points = 100 * 2 * exact_interest_matches / (total interests of the first + total interests of the second), where an exact match is the same group AND key counted on both sides. Two personas with identical interest sets grade 100, pairs with nothing shared grade 0; time and handshakes weigh nothing, so the same interest sets always grade the same. The handshake flags of the response stay informational. Requires the FIRST persona's Bearer token; both users must live in the room.",
                 "consumes": [
                     "application/json"
                 ],
@@ -752,7 +752,7 @@ const docTemplate = `{
                 "tags": [
                     "matching"
                 ],
-                "summary": "time-independent matching score of two users",
+                "summary": "matching-interest percent of two users",
                 "parameters": [
                     {
                         "description": "Match request",
@@ -1489,7 +1489,7 @@ const docTemplate = `{
                 }
             },
             "put": {
-                "description": "Updates name and/or bios of a user. Omitted fields keep their value.",
+                "description": "Updates name, bios and the active flag (the auto-matchmaking opt-out, feature #36) of a user. Omitted fields keep their value.",
                 "consumes": [
                     "application/json"
                 ],
@@ -2542,6 +2542,11 @@ const docTemplate = `{
         "model.User": {
             "type": "object",
             "properties": {
+                "active": {
+                    "description": "Active users are matched by the auto-matchmaking worker; the flag is\ntrue by default and togglable via the user update endpoint.",
+                    "type": "boolean",
+                    "example": true
+                },
                 "address": {
                     "type": "string",
                     "example": "0xuser123"
@@ -2875,11 +2880,6 @@ const docTemplate = `{
                 "second_user_address": {
                     "type": "string",
                     "example": "0xuser456"
-                },
-                "time": {
-                    "description": "Time is the formula's time in milliseconds; converted to the hours t\nof 50 + 50 * (1 / 2^t).",
-                    "type": "number",
-                    "example": 3600000
                 }
             }
         },
@@ -3004,6 +3004,10 @@ const docTemplate = `{
         "server.UpdateUserRequest": {
             "type": "object",
             "properties": {
+                "active": {
+                    "description": "Active opts the persona in/out of the auto-matchmaking worker\n(feature #36); omitted keeps the current flag.",
+                    "type": "boolean"
+                },
                 "name": {
                     "type": "string"
                 },
