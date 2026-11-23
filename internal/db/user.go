@@ -48,6 +48,10 @@ func (d *DB) CreateUser(ctx context.Context, roomAddress string, user *model.Use
 
 	now := time.Now().UTC()
 	user.Room = roomAddress
+	user.Language = roomLanguage
+	// New personas are active by default: they enter the auto-matchmaking
+	// matrix right away (feature #36).
+	user.Active = true
 	user.CreatedAt = now
 	user.UpdatedAt = now
 
@@ -56,10 +60,10 @@ func (d *DB) CreateUser(ctx context.Context, roomAddress string, user *model.Use
 	for attempt := 0; attempt < 3; attempt++ {
 		user.Address = newAddress(16)
 		_, err = tx.ExecContext(ctx,
-			`INSERT INTO users (address, name, room, public_bio, private_bio, greeting, language, token_hash, created_at, updated_at, deleted_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+			`INSERT INTO users (address, name, room, public_bio, private_bio, greeting, language, active, token_hash, created_at, updated_at, deleted_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
 			user.Address, user.Name, roomAddress, user.PublicBio, user.PrivateBio, user.Greeting, user.Language,
-			tokenHash, user.CreatedAt.Format(time.RFC3339), user.UpdatedAt.Format(time.RFC3339),
+			boolBit(user.Active), tokenHash, user.CreatedAt.Format(time.RFC3339), user.UpdatedAt.Format(time.RFC3339),
 		)
 		if isUnique(err) {
 			continue
@@ -81,11 +85,36 @@ func (d *DB) CreateUser(ctx context.Context, roomAddress string, user *model.Use
 	return tx.Commit()
 }
 
+// userColumns is the projection every user read scans back into model.User.
+const userColumns = `address, name, room, public_bio, private_bio, greeting, language, active, created_at, updated_at, deleted_at`
+
 // ListRoomUsers returns all non-deleted users of a room.
 func (d *DB) ListRoomUsers(ctx context.Context, roomAddress string) ([]model.User, error) {
 	rows, err := d.QueryContext(ctx,
-		`SELECT address, name, room, public_bio, private_bio, greeting, language, created_at, updated_at, deleted_at
+		`SELECT `+userColumns+`
 		 FROM users WHERE room = ? AND deleted_at IS NULL ORDER BY address`, roomAddress)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	users := []model.User{}
+	for rows.Next() {
+		u, err := scanUser(rows)
+		if err != nil {
+			return nil, err
+		}
+		users = append(users, u)
+	}
+	return users, rows.Err()
+}
+
+// ListActiveRoomUsers returns the non-deleted ACTIVE users of a room —
+// the pool the auto-matchmaking worker ranks (feature #36).
+func (d *DB) ListActiveRoomUsers(ctx context.Context, roomAddress string) ([]model.User, error) {
+	rows, err := d.QueryContext(ctx,
+		`SELECT `+userColumns+`
+		 FROM users WHERE room = ? AND deleted_at IS NULL AND active = 1 ORDER BY address`, roomAddress)
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +134,7 @@ func (d *DB) ListRoomUsers(ctx context.Context, roomAddress string) ([]model.Use
 // GetUser returns a single non-deleted user inside the given room.
 func (d *DB) GetUser(ctx context.Context, roomAddress, address string) (model.User, error) {
 	row := d.QueryRowContext(ctx,
-		`SELECT address, name, room, public_bio, private_bio, greeting, language, created_at, updated_at, deleted_at
+		`SELECT `+userColumns+`
 		 FROM users WHERE address = ? AND room = ? AND deleted_at IS NULL`, address, roomAddress)
 	user, err := scanUser(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -125,8 +154,10 @@ func (d *DB) UserByAddress(ctx context.Context, address string) (model.User, boo
 	return UserByAddressOn(ctx, d, address)
 }
 
-// UpdateUser updates name/bios of a non-deleted user inside the given room.
-func (d *DB) UpdateUser(ctx context.Context, roomAddress, address string, name, publicBio, privateBio *string) (model.User, error) {
+// UpdateUser updates name/bios and the active flag of a non-deleted user
+// inside the given room. Omitted fields keep their value (active: nil
+// pointer keeps the current flag).
+func (d *DB) UpdateUser(ctx context.Context, roomAddress, address string, name, publicBio, privateBio *string, active *bool) (model.User, error) {
 	cur, err := d.GetUser(ctx, roomAddress, address)
 	if err != nil {
 		return model.User{}, err
@@ -140,12 +171,15 @@ func (d *DB) UpdateUser(ctx context.Context, roomAddress, address string, name, 
 	if privateBio != nil {
 		cur.PrivateBio = *privateBio
 	}
+	if active != nil {
+		cur.Active = *active
+	}
 	cur.UpdatedAt = time.Now().UTC()
 
 	_, err = d.ExecContext(ctx,
-		`UPDATE users SET name = ?, public_bio = ?, private_bio = ?, updated_at = ?
+		`UPDATE users SET name = ?, public_bio = ?, private_bio = ?, active = ?, updated_at = ?
 		 WHERE address = ? AND room = ? AND deleted_at IS NULL`,
-		cur.Name, cur.PublicBio, cur.PrivateBio, cur.UpdatedAt.Format(time.RFC3339), address, roomAddress)
+		cur.Name, cur.PublicBio, cur.PrivateBio, boolBit(cur.Active), cur.UpdatedAt.Format(time.RFC3339), address, roomAddress)
 	if err != nil {
 		return model.User{}, err
 	}
@@ -197,12 +231,22 @@ func scanUser(s scanner) (model.User, error) {
 		createdAt string
 		updatedAt string
 		deletedAt sql.NullString
+		active    int
 	)
-	if err := s.Scan(&u.Address, &u.Name, &u.Room, &u.PublicBio, &u.PrivateBio, &u.Greeting, &u.Language, &createdAt, &updatedAt, &deletedAt); err != nil {
+	if err := s.Scan(&u.Address, &u.Name, &u.Room, &u.PublicBio, &u.PrivateBio, &u.Greeting, &u.Language, &active, &createdAt, &updatedAt, &deletedAt); err != nil {
 		return model.User{}, err
 	}
 	u.CreatedAt = parseTS(createdAt)
 	u.UpdatedAt = parseTS(updatedAt)
 	u.DeletedAt = parseNullTS(deletedAt)
+	u.Active = active == 1
 	return u, nil
+}
+
+// boolBit maps a bool to the 0/1 the users.active column stores.
+func boolBit(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }

@@ -227,6 +227,136 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/contact": {
+            "post": {
+                "security": [
+                    {
+                        "UserToken": []
+                    }
+                ],
+                "description": "Shares contact details from one persona to another inside the network. Requires the FROM persona's Bearer token; both users must exist and differ. The (from, to) pair is unique: a persona can share its contacts with a given user only once - a repeated share answers 409. Content is required and limited to 255 symbols.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "contacts"
+                ],
+                "summary": "share contacts",
+                "parameters": [
+                    {
+                        "description": "Contact to share",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.ShareContactRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/model.Contact"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/contact/{address}": {
+            "get": {
+                "security": [
+                    {
+                        "UserToken": []
+                    }
+                ],
+                "description": "Returns every contact shared with the given persona, newest first. ONLY the recipient has access to the records: requires that persona's Bearer token.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "contacts"
+                ],
+                "summary": "list contacts of a user",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "User address (the recipient)",
+                        "name": "address",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/model.Contact"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/api/handshake": {
             "post": {
                 "security": [
@@ -432,6 +562,75 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/hard-match": {
+            "post": {
+                "security": [
+                    {
+                        "UserToken": []
+                    }
+                ],
+                "description": "Summarizes the chat of the pair, grades the networking checklist (both introduced themselves, found a shared topic, balanced turns, questions answered, warm farewell), merges the checkpoint result with the time-independent match score (POST /api/match/v2) and stores one Summary per pair. The method activates only once: a repeated call for a pair that already has a summary returns the stored record without re-summarizing. Handshakes impact NO value: the method is only reachable for pairs with a mutual handshake anyway (the chat requires both directions), so the soft score entering the merge is driven by shared interests alone. The merged score stays strictly inside (0, 100) and a full match (\u003e 80) is rare: hard = 50 + 50 * tanh((closed - 3) / 2) keeps an average 3/5 chat at the neutral 50 and a perfect 5/5 conversation at 88.08, so the merged score only crosses 80 when the interest-driven soft score is strong as well. Requires the FIRST persona's Bearer token; both users must live in the room and their chat must exist.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "matching"
+                ],
+                "summary": "hard match of two users",
+                "parameters": [
+                    {
+                        "description": "Hard match request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.HardMatchRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/model.Summary"
+                        }
+                    },
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/model.Summary"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/api/invite/{code}": {
             "get": {
                 "description": "Resolves a currently-valid 6-digit invite code to its room address. Public read, rate-limited per source.",
@@ -466,6 +665,132 @@ const docTemplate = `{
                     },
                     "429": {
                         "description": "Too Many Requests",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/match": {
+            "post": {
+                "security": [
+                    {
+                        "UserToken": []
+                    }
+                ],
+                "description": "Computes the matching points (0..100) of two personas inside one room: points = 100 * (1 - 1/(C * 2^t)) with t the hours (float) since the FIRST persona's creation (computed server-side; the request carries no time). C = 1 + handshake directions (+1 per directed handshake between the two in the room) + the matching-interest percent (2 * exact interest matches / the interests total of both personas; every match is the same group AND key, counted on both sides — identical interest sets grade a full 100 %). The score grows with the first persona's age toward 100. Requires the FIRST persona's Bearer token; both users must live in the room.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "matching"
+                ],
+                "summary": "matching score of two users",
+                "parameters": [
+                    {
+                        "description": "Match request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.MatchRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/db.MatchResult"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/match/v2": {
+            "post": {
+                "security": [
+                    {
+                        "UserToken": []
+                    }
+                ],
+                "description": "Computes the matching points of two personas inside one room as the pure matching-interest percent: points = 100 * 2 * exact_interest_matches / (total interests of the first + total interests of the second), where an exact match is the same group AND key counted on both sides. Two personas with identical interest sets grade 100, pairs with nothing shared grade 0; time and handshakes weigh nothing, so the same interest sets always grade the same. The handshake flags of the response stay informational. Requires the FIRST persona's Bearer token; both users must live in the room.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "matching"
+                ],
+                "summary": "matching-interest percent of two users",
+                "parameters": [
+                    {
+                        "description": "Match request",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.MatchV2Request"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/db.MatchResult"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
                         "schema": {
                             "type": "string"
                         }
@@ -1164,7 +1489,7 @@ const docTemplate = `{
                 }
             },
             "put": {
-                "description": "Updates name and/or bios of a user. Omitted fields keep their value.",
+                "description": "Updates name, bios and the active flag (the auto-matchmaking opt-out, feature #36) of a user. Omitted fields keep their value.",
                 "consumes": [
                     "application/json"
                 ],
@@ -1585,6 +1910,164 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/room/{room}/user/{address}/interest": {
+            "post": {
+                "security": [
+                    {
+                        "UserToken": []
+                    }
+                ],
+                "description": "Upserts many interests for a non-deleted user inside the room. Requires that persona's Bearer token. Each interest carries a title (1..64 symbols), a numeric group (the category) and a numeric key (the concrete interest); the key is unique per user, so re-adding an existing key replaces the title/group. The list holds 1..50 rows. Responds 201 with the user's full resulting list.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "interests"
+                ],
+                "summary": "add interests of a user",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Room address",
+                        "name": "room",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "User address",
+                        "name": "address",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Interests to add",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.AddInterestsRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/model.Interest"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "UserToken": []
+                    }
+                ],
+                "description": "Deletes the interests with the given keys of a non-deleted user inside the room. Requires that persona's Bearer token. The list holds 1..50 keys; unknown keys are ignored (idempotent delete). Responds 200 with the user's remaining interests.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "interests"
+                ],
+                "summary": "delete interests of a user",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Room address",
+                        "name": "room",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "User address",
+                        "name": "address",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Interest keys to delete",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/server.DeleteInterestsRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "array",
+                            "items": {
+                                "$ref": "#/definitions/model.Interest"
+                            }
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/api/room/{room}/user/{address}/mutual-code": {
             "post": {
                 "security": [
@@ -1790,6 +2273,31 @@ const docTemplate = `{
         }
     },
     "definitions": {
+        "db.MatchResult": {
+            "type": "object",
+            "properties": {
+                "exact_interest_matches": {
+                    "description": "ExactMatches is the number of exact interest matches (same group\nand same key on both sides).",
+                    "type": "integer"
+                },
+                "handshake": {
+                    "description": "Handshake reports that at least one directed handshake exists.",
+                    "type": "boolean"
+                },
+                "mutual_handshake": {
+                    "description": "MutualHandshake reports that both directed handshakes exist (the\ninstant-100 case).",
+                    "type": "boolean"
+                },
+                "points": {
+                    "description": "Points is the final score, always within [0, 100].",
+                    "type": "number"
+                },
+                "shared_groups": {
+                    "description": "SharedGroups is the number of interest groups present on both sides.",
+                    "type": "integer"
+                }
+            }
+        },
         "model.Chat": {
             "type": "object",
             "properties": {
@@ -1799,6 +2307,11 @@ const docTemplate = `{
                 },
                 "created_at": {
                     "type": "string"
+                },
+                "done": {
+                    "description": "Done reports that the conversation reached its final goodbye: the\nfarewell turn stamps it automatically; a kickoff resets it to false.",
+                    "type": "boolean",
+                    "example": false
                 },
                 "language": {
                     "type": "string",
@@ -1818,6 +2331,43 @@ const docTemplate = `{
                 "scenario": {
                     "type": "string",
                     "example": "ai-future"
+                }
+            }
+        },
+        "model.Checkpoint": {
+            "type": "object",
+            "properties": {
+                "closed": {
+                    "type": "boolean",
+                    "example": true
+                },
+                "key": {
+                    "type": "string",
+                    "example": "introductions"
+                },
+                "label": {
+                    "type": "string",
+                    "example": "Both introduced themselves"
+                }
+            }
+        },
+        "model.Contact": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "example": "telegram: @alice_paints"
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "from": {
+                    "type": "string",
+                    "example": "0xuser123"
+                },
+                "to": {
+                    "type": "string",
+                    "example": "0xuser456"
                 }
             }
         },
@@ -1850,6 +2400,27 @@ const docTemplate = `{
                 "value": {
                     "type": "integer",
                     "example": 1
+                }
+            }
+        },
+        "model.Interest": {
+            "type": "object",
+            "properties": {
+                "group": {
+                    "type": "integer",
+                    "example": 1
+                },
+                "key": {
+                    "type": "integer",
+                    "example": 7
+                },
+                "title": {
+                    "type": "string",
+                    "example": "Chess"
+                },
+                "user_address": {
+                    "type": "string",
+                    "example": "0xuser123"
                 }
             }
         },
@@ -1928,9 +2499,54 @@ const docTemplate = `{
                 }
             }
         },
+        "model.Summary": {
+            "type": "object",
+            "properties": {
+                "chat": {
+                    "type": "string",
+                    "example": "0xchat123"
+                },
+                "checkpoints": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/model.Checkpoint"
+                    }
+                },
+                "created_at": {
+                    "type": "string"
+                },
+                "description": {
+                    "description": "Description is the chat summarization produced by the hard match.",
+                    "type": "string",
+                    "example": "Alice and Bob introduced themselves, found a shared love of watercolor and closed with a warm goodbye."
+                },
+                "room": {
+                    "type": "string",
+                    "example": "0xroom123"
+                },
+                "score": {
+                    "description": "Score is the merged hard-match score, strictly inside (0, 100).",
+                    "type": "number",
+                    "example": 66.4
+                },
+                "user_a": {
+                    "type": "string",
+                    "example": "0xuser123"
+                },
+                "user_b": {
+                    "type": "string",
+                    "example": "0xuser456"
+                }
+            }
+        },
         "model.User": {
             "type": "object",
             "properties": {
+                "active": {
+                    "description": "Active users are matched by the auto-matchmaking worker; the flag is\ntrue by default and togglable via the user update endpoint.",
+                    "type": "boolean",
+                    "example": true
+                },
                 "address": {
                     "type": "string",
                     "example": "0xuser123"
@@ -1975,6 +2591,17 @@ const docTemplate = `{
                 }
             }
         },
+        "server.AddInterestsRequest": {
+            "type": "object",
+            "properties": {
+                "interests": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.InterestInput"
+                    }
+                }
+            }
+        },
         "server.ChatResponse": {
             "type": "object",
             "properties": {
@@ -1984,6 +2611,11 @@ const docTemplate = `{
                 },
                 "created_at": {
                     "type": "string"
+                },
+                "done": {
+                    "description": "Done reports that the conversation reached its final goodbye: the\nfarewell turn stamps it automatically; a kickoff resets it to false.",
+                    "type": "boolean",
+                    "example": false
                 },
                 "language": {
                     "type": "string",
@@ -2131,6 +2763,22 @@ const docTemplate = `{
                 }
             }
         },
+        "server.DeleteInterestsRequest": {
+            "type": "object",
+            "properties": {
+                "keys": {
+                    "type": "array",
+                    "items": {
+                        "type": "integer"
+                    },
+                    "example": [
+                        1,
+                        2,
+                        3
+                    ]
+                }
+            }
+        },
         "server.GreetingResponse": {
             "type": "object",
             "properties": {
@@ -2139,6 +2787,40 @@ const docTemplate = `{
                 },
                 "greeting": {
                     "type": "string"
+                }
+            }
+        },
+        "server.HardMatchRequest": {
+            "type": "object",
+            "properties": {
+                "first_user_address": {
+                    "type": "string",
+                    "example": "0xuser123"
+                },
+                "room_address": {
+                    "type": "string",
+                    "example": "0xroom123"
+                },
+                "second_user_address": {
+                    "type": "string",
+                    "example": "0xuser456"
+                }
+            }
+        },
+        "server.InterestInput": {
+            "type": "object",
+            "properties": {
+                "group": {
+                    "type": "integer",
+                    "example": 1
+                },
+                "key": {
+                    "type": "integer",
+                    "example": 7
+                },
+                "title": {
+                    "type": "string",
+                    "example": "Chess"
                 }
             }
         },
@@ -2181,6 +2863,40 @@ const docTemplate = `{
                 },
                 "speaker": {
                     "type": "string"
+                }
+            }
+        },
+        "server.MatchRequest": {
+            "type": "object",
+            "properties": {
+                "first_user_address": {
+                    "type": "string",
+                    "example": "0xuser123"
+                },
+                "room_address": {
+                    "type": "string",
+                    "example": "0xroom123"
+                },
+                "second_user_address": {
+                    "type": "string",
+                    "example": "0xuser456"
+                }
+            }
+        },
+        "server.MatchV2Request": {
+            "type": "object",
+            "properties": {
+                "first_user_address": {
+                    "type": "string",
+                    "example": "0xuser123"
+                },
+                "room_address": {
+                    "type": "string",
+                    "example": "0xroom123"
+                },
+                "second_user_address": {
+                    "type": "string",
+                    "example": "0xuser456"
                 }
             }
         },
@@ -2256,6 +2972,24 @@ const docTemplate = `{
                 }
             }
         },
+        "server.ShareContactRequest": {
+            "type": "object",
+            "properties": {
+                "content": {
+                    "description": "Content is the contact detail itself (a messenger handle, an email,\na phone line, ...).",
+                    "type": "string",
+                    "example": "telegram: @alice_paints"
+                },
+                "from": {
+                    "type": "string",
+                    "example": "0xuser123"
+                },
+                "to": {
+                    "type": "string",
+                    "example": "0xuser456"
+                }
+            }
+        },
         "server.UpdateRoomRequest": {
             "type": "object",
             "properties": {
@@ -2270,6 +3004,10 @@ const docTemplate = `{
         "server.UpdateUserRequest": {
             "type": "object",
             "properties": {
+                "active": {
+                    "description": "Active opts the persona in/out of the auto-matchmaking worker\n(feature #36); omitted keeps the current flag.",
+                    "type": "boolean"
+                },
                 "name": {
                     "type": "string"
                 },

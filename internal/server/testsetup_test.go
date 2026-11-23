@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/extube/bleak-node/internal/db"
 )
@@ -105,4 +106,16 @@ func statusOf(resp *http.Response) int {
 		return 0
 	}
 	return resp.StatusCode
+}
+
+// backdateTestUser sets a user's created_at to now - hours (the match
+// formula's t is read from that column).
+func backdateTestUser(t *testing.T, database *db.DB, address string, hours float64) {
+	t.Helper()
+	created := time.Now().UTC().Add(-time.Duration(hours * float64(time.Hour)))
+	if _, err := database.ExecContext(context.Background(),
+		`UPDATE users SET created_at = ? WHERE address = ?`,
+		created.Format(time.RFC3339), address); err != nil {
+		t.Fatalf("backdate user: %v", err)
+	}
 }

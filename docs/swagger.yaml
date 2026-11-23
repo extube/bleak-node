@@ -1,5 +1,28 @@
 basePath: /
 definitions:
+  db.MatchResult:
+    properties:
+      exact_interest_matches:
+        description: |-
+          ExactMatches is the number of exact interest matches (same group
+          and same key on both sides).
+        type: integer
+      handshake:
+        description: Handshake reports that at least one directed handshake exists.
+        type: boolean
+      mutual_handshake:
+        description: |-
+          MutualHandshake reports that both directed handshakes exist (the
+          instant-100 case).
+        type: boolean
+      points:
+        description: Points is the final score, always within [0, 100].
+        type: number
+      shared_groups:
+        description: SharedGroups is the number of interest groups present on both
+          sides.
+        type: integer
+    type: object
   model.Chat:
     properties:
       address:
@@ -7,6 +30,12 @@ definitions:
         type: string
       created_at:
         type: string
+      done:
+        description: |-
+          Done reports that the conversation reached its final goodbye: the
+          farewell turn stamps it automatically; a kickoff resets it to false.
+        example: false
+        type: boolean
       language:
         example: en
         type: string
@@ -20,6 +49,32 @@ definitions:
         type: string
       scenario:
         example: ai-future
+        type: string
+    type: object
+  model.Checkpoint:
+    properties:
+      closed:
+        example: true
+        type: boolean
+      key:
+        example: introductions
+        type: string
+      label:
+        example: Both introduced themselves
+        type: string
+    type: object
+  model.Contact:
+    properties:
+      content:
+        example: 'telegram: @alice_paints'
+        type: string
+      created_at:
+        type: string
+      from:
+        example: 0xuser123
+        type: string
+      to:
+        example: 0xuser456
         type: string
     type: object
   model.Handshake:
@@ -44,6 +99,21 @@ definitions:
       value:
         example: 1
         type: integer
+    type: object
+  model.Interest:
+    properties:
+      group:
+        example: 1
+        type: integer
+      key:
+        example: 7
+        type: integer
+      title:
+        example: Chess
+        type: string
+      user_address:
+        example: 0xuser123
+        type: string
     type: object
   model.Message:
     properties:
@@ -98,8 +168,44 @@ definitions:
       updated_at:
         type: string
     type: object
+  model.Summary:
+    properties:
+      chat:
+        example: 0xchat123
+        type: string
+      checkpoints:
+        items:
+          $ref: '#/definitions/model.Checkpoint'
+        type: array
+      created_at:
+        type: string
+      description:
+        description: Description is the chat summarization produced by the hard match.
+        example: Alice and Bob introduced themselves, found a shared love of watercolor
+          and closed with a warm goodbye.
+        type: string
+      room:
+        example: 0xroom123
+        type: string
+      score:
+        description: Score is the merged hard-match score, strictly inside (0, 100).
+        example: 66.4
+        type: number
+      user_a:
+        example: 0xuser123
+        type: string
+      user_b:
+        example: 0xuser456
+        type: string
+    type: object
   model.User:
     properties:
+      active:
+        description: |-
+          Active users are matched by the auto-matchmaking worker; the flag is
+          true by default and togglable via the user update endpoint.
+        example: true
+        type: boolean
       address:
         example: 0xuser123
         type: string
@@ -136,6 +242,13 @@ definitions:
       updated_at:
         type: string
     type: object
+  server.AddInterestsRequest:
+    properties:
+      interests:
+        items:
+          $ref: '#/definitions/server.InterestInput'
+        type: array
+    type: object
   server.ChatResponse:
     properties:
       address:
@@ -143,6 +256,12 @@ definitions:
         type: string
       created_at:
         type: string
+      done:
+        description: |-
+          Done reports that the conversation reached its final goodbye: the
+          farewell turn stamps it automatically; a kickoff resets it to false.
+        example: false
+        type: boolean
       language:
         example: en
         type: string
@@ -241,11 +360,46 @@ definitions:
       token:
         type: string
     type: object
+  server.DeleteInterestsRequest:
+    properties:
+      keys:
+        example:
+        - 1
+        - 2
+        - 3
+        items:
+          type: integer
+        type: array
+    type: object
   server.GreetingResponse:
     properties:
       address:
         type: string
       greeting:
+        type: string
+    type: object
+  server.HardMatchRequest:
+    properties:
+      first_user_address:
+        example: 0xuser123
+        type: string
+      room_address:
+        example: 0xroom123
+        type: string
+      second_user_address:
+        example: 0xuser456
+        type: string
+    type: object
+  server.InterestInput:
+    properties:
+      group:
+        example: 1
+        type: integer
+      key:
+        example: 7
+        type: integer
+      title:
+        example: Chess
         type: string
     type: object
   server.InviteListResponse:
@@ -273,6 +427,30 @@ definitions:
       cleared:
         type: integer
       speaker:
+        type: string
+    type: object
+  server.MatchRequest:
+    properties:
+      first_user_address:
+        example: 0xuser123
+        type: string
+      room_address:
+        example: 0xroom123
+        type: string
+      second_user_address:
+        example: 0xuser456
+        type: string
+    type: object
+  server.MatchV2Request:
+    properties:
+      first_user_address:
+        example: 0xuser123
+        type: string
+      room_address:
+        example: 0xroom123
+        type: string
+      second_user_address:
+        example: 0xuser456
         type: string
     type: object
   server.MutualCodeResponse:
@@ -321,6 +499,21 @@ definitions:
       mutual_code_hash:
         type: string
     type: object
+  server.ShareContactRequest:
+    properties:
+      content:
+        description: |-
+          Content is the contact detail itself (a messenger handle, an email,
+          a phone line, ...).
+        example: 'telegram: @alice_paints'
+        type: string
+      from:
+        example: 0xuser123
+        type: string
+      to:
+        example: 0xuser456
+        type: string
+    type: object
   server.UpdateRoomRequest:
     properties:
       description:
@@ -330,6 +523,11 @@ definitions:
     type: object
   server.UpdateUserRequest:
     properties:
+      active:
+        description: |-
+          Active opts the persona in/out of the auto-matchmaking worker
+          (feature #36); omitted keeps the current flag.
+        type: boolean
       name:
         type: string
       private_bio:
@@ -485,6 +683,95 @@ paths:
       summary: list messages of a chat
       tags:
       - messages
+  /api/contact:
+    post:
+      consumes:
+      - application/json
+      description: 'Shares contact details from one persona to another inside the
+        network. Requires the FROM persona''s Bearer token; both users must exist
+        and differ. The (from, to) pair is unique: a persona can share its contacts
+        with a given user only once - a repeated share answers 409. Content is required
+        and limited to 255 symbols.'
+      parameters:
+      - description: Contact to share
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/server.ShareContactRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/model.Contact'
+        "400":
+          description: Bad Request
+          schema:
+            type: string
+        "401":
+          description: Unauthorized
+          schema:
+            type: string
+        "403":
+          description: Forbidden
+          schema:
+            type: string
+        "404":
+          description: Not Found
+          schema:
+            type: string
+        "409":
+          description: Conflict
+          schema:
+            type: string
+      security:
+      - UserToken: []
+      summary: share contacts
+      tags:
+      - contacts
+  /api/contact/{address}:
+    get:
+      description: 'Returns every contact shared with the given persona, newest first.
+        ONLY the recipient has access to the records: requires that persona''s Bearer
+        token.'
+      parameters:
+      - description: User address (the recipient)
+        in: path
+        name: address
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/model.Contact'
+            type: array
+        "400":
+          description: Bad Request
+          schema:
+            type: string
+        "401":
+          description: Unauthorized
+          schema:
+            type: string
+        "403":
+          description: Forbidden
+          schema:
+            type: string
+        "404":
+          description: Not Found
+          schema:
+            type: string
+      security:
+      - UserToken: []
+      summary: list contacts of a user
+      tags:
+      - contacts
   /api/handshake:
     post:
       consumes:
@@ -629,6 +916,63 @@ paths:
       summary: list handshakes of a user
       tags:
       - handshakes
+  /api/hard-match:
+    post:
+      consumes:
+      - application/json
+      description: 'Summarizes the chat of the pair, grades the networking checklist
+        (both introduced themselves, found a shared topic, balanced turns, questions
+        answered, warm farewell), merges the checkpoint result with the time-independent
+        match score (POST /api/match/v2) and stores one Summary per pair. The method
+        activates only once: a repeated call for a pair that already has a summary
+        returns the stored record without re-summarizing. Handshakes impact NO value:
+        the method is only reachable for pairs with a mutual handshake anyway (the
+        chat requires both directions), so the soft score entering the merge is driven
+        by shared interests alone. The merged score stays strictly inside (0, 100)
+        and a full match (> 80) is rare: hard = 50 + 50 * tanh((closed - 3) / 2) keeps
+        an average 3/5 chat at the neutral 50 and a perfect 5/5 conversation at 88.08,
+        so the merged score only crosses 80 when the interest-driven soft score is
+        strong as well. Requires the FIRST persona''s Bearer token; both users must
+        live in the room and their chat must exist.'
+      parameters:
+      - description: Hard match request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/server.HardMatchRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/model.Summary'
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/model.Summary'
+        "400":
+          description: Bad Request
+          schema:
+            type: string
+        "401":
+          description: Unauthorized
+          schema:
+            type: string
+        "403":
+          description: Forbidden
+          schema:
+            type: string
+        "404":
+          description: Not Found
+          schema:
+            type: string
+      security:
+      - UserToken: []
+      summary: hard match of two users
+      tags:
+      - matching
   /api/invite/{code}:
     get:
       description: Resolves a currently-valid 6-digit invite code to its room address.
@@ -657,6 +1001,101 @@ paths:
       summary: resolve an invite code
       tags:
       - credentials
+  /api/match:
+    post:
+      consumes:
+      - application/json
+      description: 'Computes the matching points (0..100) of two personas inside one
+        room: points = 100 * (1 - 1/(C * 2^t)) with t the hours (float) since the
+        FIRST persona''s creation (computed server-side; the request carries no time).
+        C = 1 + handshake directions (+1 per directed handshake between the two in
+        the room) + the matching-interest percent (2 * exact interest matches / the
+        interests total of both personas; every match is the same group AND key, counted
+        on both sides — identical interest sets grade a full 100 %). The score grows
+        with the first persona''s age toward 100. Requires the FIRST persona''s Bearer
+        token; both users must live in the room.'
+      parameters:
+      - description: Match request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/server.MatchRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/db.MatchResult'
+        "400":
+          description: Bad Request
+          schema:
+            type: string
+        "401":
+          description: Unauthorized
+          schema:
+            type: string
+        "403":
+          description: Forbidden
+          schema:
+            type: string
+        "404":
+          description: Not Found
+          schema:
+            type: string
+      security:
+      - UserToken: []
+      summary: matching score of two users
+      tags:
+      - matching
+  /api/match/v2:
+    post:
+      consumes:
+      - application/json
+      description: 'Computes the matching points of two personas inside one room as
+        the pure matching-interest percent: points = 100 * 2 * exact_interest_matches
+        / (total interests of the first + total interests of the second), where an
+        exact match is the same group AND key counted on both sides. Two personas
+        with identical interest sets grade 100, pairs with nothing shared grade 0;
+        time and handshakes weigh nothing, so the same interest sets always grade
+        the same. The handshake flags of the response stay informational. Requires
+        the FIRST persona''s Bearer token; both users must live in the room.'
+      parameters:
+      - description: Match request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/server.MatchV2Request'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/db.MatchResult'
+        "400":
+          description: Bad Request
+          schema:
+            type: string
+        "401":
+          description: Unauthorized
+          schema:
+            type: string
+        "403":
+          description: Forbidden
+          schema:
+            type: string
+        "404":
+          description: Not Found
+          schema:
+            type: string
+      security:
+      - UserToken: []
+      summary: matching-interest percent of two users
+      tags:
+      - matching
   /api/message:
     post:
       consumes:
@@ -1164,7 +1603,8 @@ paths:
     put:
       consumes:
       - application/json
-      description: Updates name and/or bios of a user. Omitted fields keep their value.
+      description: 'Updates name, bios and the active flag (the auto-matchmaking opt-out,
+        feature #36) of a user. Omitted fields keep their value.'
       parameters:
       - description: Room address
         in: path
@@ -1410,6 +1850,116 @@ paths:
       summary: regenerate user greeting
       tags:
       - users
+  /api/room/{room}/user/{address}/interest:
+    delete:
+      consumes:
+      - application/json
+      description: Deletes the interests with the given keys of a non-deleted user
+        inside the room. Requires that persona's Bearer token. The list holds 1..50
+        keys; unknown keys are ignored (idempotent delete). Responds 200 with the
+        user's remaining interests.
+      parameters:
+      - description: Room address
+        in: path
+        name: room
+        required: true
+        type: string
+      - description: User address
+        in: path
+        name: address
+        required: true
+        type: string
+      - description: Interest keys to delete
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/server.DeleteInterestsRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/model.Interest'
+            type: array
+        "400":
+          description: Bad Request
+          schema:
+            type: string
+        "401":
+          description: Unauthorized
+          schema:
+            type: string
+        "403":
+          description: Forbidden
+          schema:
+            type: string
+        "404":
+          description: Not Found
+          schema:
+            type: string
+      security:
+      - UserToken: []
+      summary: delete interests of a user
+      tags:
+      - interests
+    post:
+      consumes:
+      - application/json
+      description: Upserts many interests for a non-deleted user inside the room.
+        Requires that persona's Bearer token. Each interest carries a title (1..64
+        symbols), a numeric group (the category) and a numeric key (the concrete interest);
+        the key is unique per user, so re-adding an existing key replaces the title/group.
+        The list holds 1..50 rows. Responds 201 with the user's full resulting list.
+      parameters:
+      - description: Room address
+        in: path
+        name: room
+        required: true
+        type: string
+      - description: User address
+        in: path
+        name: address
+        required: true
+        type: string
+      - description: Interests to add
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/server.AddInterestsRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            items:
+              $ref: '#/definitions/model.Interest'
+            type: array
+        "400":
+          description: Bad Request
+          schema:
+            type: string
+        "401":
+          description: Unauthorized
+          schema:
+            type: string
+        "403":
+          description: Forbidden
+          schema:
+            type: string
+        "404":
+          description: Not Found
+          schema:
+            type: string
+      security:
+      - UserToken: []
+      summary: add interests of a user
+      tags:
+      - interests
   /api/room/{room}/user/{address}/mutual-code:
     post:
       consumes:

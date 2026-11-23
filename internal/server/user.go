@@ -28,6 +28,9 @@ type UpdateUserRequest struct {
 	Name       *string `json:"name"`
 	PublicBio  *string `json:"public_bio"`
 	PrivateBio *string `json:"private_bio"`
+	// Active opts the persona in/out of the auto-matchmaking worker
+	// (feature #36); omitted keeps the current flag.
+	Active *bool `json:"active"`
 }
 
 const maxUserBioLen = 255
@@ -172,7 +175,7 @@ func (s *Server) GetUser(w http.ResponseWriter, r *http.Request) {
 // UpdateUser partially updates a user.
 //
 //	@Summary		update user
-//	@Description	Updates name and/or bios of a user. Omitted fields keep their value.
+//	@Description	Updates name, bios and the active flag (the auto-matchmaking opt-out, feature #36) of a user. Omitted fields keep their value.
 //	@Tags			users
 //	@Accept			json
 //	@Produce		json
@@ -208,7 +211,7 @@ func (s *Server) UpdateUser(w http.ResponseWriter, r *http.Request) {
 	}
 
 	user, err := s.db.UpdateUser(r.Context(), r.PathValue("room"), r.PathValue("address"),
-		req.Name, req.PublicBio, req.PrivateBio)
+		req.Name, req.PublicBio, req.PrivateBio, req.Active)
 	if err != nil {
 		s.mapError(w, err)
 		return

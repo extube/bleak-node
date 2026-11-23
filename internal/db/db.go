@@ -80,6 +80,7 @@ CREATE TABLE IF NOT EXISTS users (
 	created_at  TEXT NOT NULL,
 	updated_at  TEXT NOT NULL,
 	deleted_at  TEXT,
+	active      INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
 	token_hash        TEXT,
 	mutual_code_hash  TEXT
 );
@@ -106,6 +107,20 @@ CREATE INDEX IF NOT EXISTS idx_room_invites_room ON room_invites(room_address);
 
 CREATE INDEX IF NOT EXISTS idx_users_room ON users(room);
 
+-- Personas declare their interests: a title classified by a numeric group
+-- (the category) and a numeric key (the concrete interest). One row per
+-- (user, key): re-adding an existing key upserts the title/group. The
+-- matching score (POST /api/match) reads them.
+CREATE TABLE IF NOT EXISTS interests (
+	user_address TEXT NOT NULL REFERENCES users(address),
+	title        TEXT NOT NULL CHECK (length(title) <= 64),
+	"group"      INTEGER NOT NULL,
+	"key"        INTEGER NOT NULL,
+	PRIMARY KEY (user_address, "key")
+);
+
+CREATE INDEX IF NOT EXISTS idx_interests_user ON interests(user_address);
+
 -- from_address may be a room (system "welcome" handshake), so foreign keys
 -- are intentionally not declared here; the application validates addresses.
 CREATE TABLE IF NOT EXISTS handshakes (
@@ -127,6 +142,7 @@ CREATE TABLE IF NOT EXISTS chats (
 	language         TEXT NOT NULL DEFAULT 'en',
 	phase            TEXT NOT NULL DEFAULT '',
 	phase_started_at TEXT NOT NULL DEFAULT '',
+	done             INTEGER NOT NULL DEFAULT 0,
 	created_at       TEXT NOT NULL
 );
 
@@ -167,6 +183,35 @@ CREATE TABLE IF NOT EXISTS events (
 );
 
 CREATE INDEX IF NOT EXISTS idx_events_status ON events(status, id);
+
+-- Hard matching (feature #35): one summarized result per user pair. The
+-- chat is the primary key (a pair holds exactly one chat) and the
+-- canonical (user_a < user_b) pair index drives the once-only lookup.
+CREATE TABLE IF NOT EXISTS summaries (
+	chat        TEXT PRIMARY KEY REFERENCES chats(address),
+	room        TEXT NOT NULL DEFAULT '',
+	user_a      TEXT NOT NULL REFERENCES users(address),
+	user_b      TEXT NOT NULL REFERENCES users(address),
+	score       REAL NOT NULL CHECK (score > 0 AND score < 100),
+	checklist   TEXT NOT NULL DEFAULT '' CHECK (length(checklist) <= 255),
+	description TEXT NOT NULL DEFAULT '' CHECK (length(description) <= 1000),
+	created_at  TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_summaries_pair ON summaries(user_a, user_b);
+
+-- Shared contacts (feature #35): the (from, to) pair is the unique key, so
+-- one persona shares its contact details with a given user only once; only
+-- the recipient reads the record.
+CREATE TABLE IF NOT EXISTS contacts (
+	"from"     TEXT NOT NULL REFERENCES users(address),
+	"to"       TEXT NOT NULL REFERENCES users(address),
+	content    TEXT NOT NULL CHECK (length(content) <= 255),
+	created_at TEXT NOT NULL,
+	PRIMARY KEY ("from", "to")
+);
+
+CREATE INDEX IF NOT EXISTS idx_contacts_to ON contacts("to");
 `
 	if _, err := d.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("migrate: %w", err)
@@ -218,6 +263,11 @@ CREATE INDEX IF NOT EXISTS idx_events_status ON events(status, id);
 	if err := d.ensureColumn(ctx, "chats", "phase_started_at", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
+	// Chat completion marker (feature #35): the farewell turn stamps it;
+	// a kickoff clears it. Older rows default to 0 (not done).
+	if err := d.ensureColumn(ctx, "chats", "done", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
 	if _, err := d.ExecContext(ctx, `
 UPDATE handshakes
 SET room = COALESCE(
@@ -259,7 +309,13 @@ WHERE room = ''`); err != nil {
 	if err := d.ensureColumn(ctx, "users", "mutual_code_hash", "TEXT"); err != nil {
 		return err
 	}
-	return d.ensureColumn(ctx, "rooms", "token_hash", "TEXT")
+	if err := d.ensureColumn(ctx, "rooms", "token_hash", "TEXT"); err != nil {
+		return err
+	}
+	// Auto-matchmaking opt-out (feature #36): active users only enter the
+	// matching matrix. Older rows default to 1 (active), the same default
+	// every new user gets.
+	return d.ensureColumn(ctx, "users", "active", "INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1))")
 }
 
 // rebuildMessagesWithCap recreates the messages table when its content

@@ -179,7 +179,7 @@ func createHandshakeOn(ctx context.Context, q rowQuerier, hs *model.Handshake, s
 // transaction sees a consistent snapshot with the caller's other reads.
 func UserByAddressOn(ctx context.Context, q rowQuerier, address string) (model.User, bool, error) {
 	row := q.QueryRowContext(ctx,
-		`SELECT address, name, room, public_bio, private_bio, greeting, language, created_at, updated_at, deleted_at
+		`SELECT `+userColumns+`
 		 FROM users WHERE address = ?`, address)
 	user, err := scanUser(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -189,6 +189,14 @@ func UserByAddressOn(ctx context.Context, q rowQuerier, address string) (model.U
 		return model.User{}, false, err
 	}
 	return user, true, nil
+}
+
+// HandshakeExists reports whether a directed handshake from → to already
+// exists (any room). The auto-match worker uses it to skip pairs the user
+// already shook hands with.
+func (d *DB) HandshakeExists(ctx context.Context, from, to string) (bool, error) {
+	_, found, err := findHandshakeOn(ctx, d, from, to)
+	return found, err
 }
 
 // findHandshakeOn runs the pair lookup on the given executor.

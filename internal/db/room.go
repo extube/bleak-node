@@ -56,6 +56,35 @@ func (d *DB) ListRooms(ctx context.Context) ([]model.Room, error) {
 	return rooms, rows.Err()
 }
 
+// ListRoomsWithActiveInvites returns all non-deleted rooms that hold at
+// least one active invite code (not revoked, not expired) — the event
+// rooms the auto-matchmaking worker operates on (feature #36).
+func (d *DB) ListRoomsWithActiveInvites(ctx context.Context) ([]model.Room, error) {
+	rows, err := d.QueryContext(ctx,
+		`SELECT address, name, description, language, max_user, created_at, updated_at, deleted_at
+		 FROM rooms
+		 WHERE deleted_at IS NULL
+		   AND EXISTS (SELECT 1 FROM room_invites
+		               WHERE room_address = rooms.address
+		                 AND revoked_at IS NULL AND expires_at > ?)
+		 ORDER BY address`,
+		time.Now().UTC().Format(time.RFC3339))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	rooms := []model.Room{}
+	for rows.Next() {
+		r, err := scanRoom(rows)
+		if err != nil {
+			return nil, err
+		}
+		rooms = append(rooms, r)
+	}
+	return rooms, rows.Err()
+}
+
 // GetRoom returns a single non-deleted room by address.
 func (d *DB) GetRoom(ctx context.Context, address string) (model.Room, error) {
 	row := d.QueryRowContext(ctx,
