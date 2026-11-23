@@ -325,6 +325,20 @@ WHERE room = ''`); err != nil {
 	return d.rebuildSummariesPerDirection(ctx)
 }
 
+// hasOldSummariesPK reports whether the stored summaries DDL keys the table
+// by chat (the per-pair shape) — compared on whitespace-normalized DDL, so
+// the check survives SQLite's column padding.
+func hasOldSummariesPK(ddl string) bool {
+	fields := strings.Fields(ddl)
+	for i := range fields {
+		if strings.EqualFold(fields[i], "chat") && i+2 < len(fields) &&
+			strings.EqualFold(fields[i+1], "TEXT") && strings.EqualFold(fields[i+2], "PRIMARY") {
+			return true
+		}
+	}
+	return false
+}
+
 // rebuildSummariesPerDirection replaces the per-pair summaries table
 // (chat primary key, feature #35) with the per-direction schema
 // (user_a -> user_b primary key, feature #43). Legacy rows carry over
@@ -341,7 +355,7 @@ func (d *DB) rebuildSummariesPerDirection(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("sqlite_master summaries: %w", err)
 	}
-	if !ddl.Valid || !strings.Contains(ddl.String, "chat TEXT PRIMARY KEY") {
+	if !ddl.Valid || !hasOldSummariesPK(ddl.String) {
 		// Already at the per-direction schema.
 		return nil
 	}
