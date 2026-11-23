@@ -184,21 +184,23 @@ CREATE TABLE IF NOT EXISTS events (
 
 CREATE INDEX IF NOT EXISTS idx_events_status ON events(status, id);
 
--- Hard matching (feature #35): one summarized result per user pair. The
--- chat is the primary key (a pair holds exactly one chat) and the
--- canonical (user_a < user_b) pair index drives the once-only lookup.
+-- Hard matching (feature #43): one summarized result per DIRECTION. The
+-- user_a -> user_b pair is the primary key: a summary for A -> B exists
+-- without a B -> A record — the reverse is a separate request. The chat
+-- column links the summarized conversation.
 CREATE TABLE IF NOT EXISTS summaries (
-	chat        TEXT PRIMARY KEY REFERENCES chats(address),
-	room        TEXT NOT NULL DEFAULT '',
 	user_a      TEXT NOT NULL REFERENCES users(address),
 	user_b      TEXT NOT NULL REFERENCES users(address),
+	chat        TEXT NOT NULL REFERENCES chats(address),
+	room        TEXT NOT NULL DEFAULT '',
 	score       REAL NOT NULL CHECK (score > 0 AND score < 100),
 	checklist   TEXT NOT NULL DEFAULT '' CHECK (length(checklist) <= 255),
 	description TEXT NOT NULL DEFAULT '' CHECK (length(description) <= 1000),
-	created_at  TEXT NOT NULL
+	created_at  TEXT NOT NULL,
+	PRIMARY KEY (user_a, user_b)
 );
 
-CREATE INDEX IF NOT EXISTS idx_summaries_pair ON summaries(user_a, user_b);
+CREATE INDEX IF NOT EXISTS idx_summaries_chat ON summaries(chat);
 
 -- Shared contacts (feature #35): the (from, to) pair is the unique key, so
 -- one persona shares its contact details with a given user only once; only
@@ -315,7 +317,63 @@ WHERE room = ''`); err != nil {
 	// Auto-matchmaking opt-out (feature #36): active users only enter the
 	// matching matrix. Older rows default to 1 (active), the same default
 	// every new user gets.
-	return d.ensureColumn(ctx, "users", "active", "INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1))")
+	if err := d.ensureColumn(ctx, "users", "active", "INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1))"); err != nil {
+		return err
+	}
+	// Per-direction summaries (feature #43): the old table keyed ONE row
+	// per pair by chat; the new one keys by (user_a, user_b) direction.
+	return d.rebuildSummariesPerDirection(ctx)
+}
+
+// rebuildSummariesPerDirection replaces the per-pair summaries table
+// (chat primary key, feature #35) with the per-direction schema
+// (user_a -> user_b primary key, feature #43). Legacy rows carry over
+// verbatim (they keep the canonical a<b order and serve as that
+// direction's record).
+func (d *DB) rebuildSummariesPerDirection(ctx context.Context) error {
+	var ddl sql.NullString
+	err := d.QueryRowContext(ctx,
+		`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'summaries'`).Scan(&ddl)
+	if errors.Is(err, sql.ErrNoRows) {
+		// Fresh database: the base schema above already created the new shape.
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("sqlite_master summaries: %w", err)
+	}
+	if !ddl.Valid || !strings.Contains(ddl.String, "chat TEXT PRIMARY KEY") {
+		// Already at the per-direction schema.
+		return nil
+	}
+
+	const rebuild = `
+ALTER TABLE summaries RENAME TO summaries_legacy;
+
+CREATE TABLE summaries (
+	user_a      TEXT NOT NULL REFERENCES users(address),
+	user_b      TEXT NOT NULL REFERENCES users(address),
+	chat        TEXT NOT NULL REFERENCES chats(address),
+	room        TEXT NOT NULL DEFAULT '',
+	score       REAL NOT NULL CHECK (score > 0 AND score < 100),
+	checklist   TEXT NOT NULL DEFAULT '' CHECK (length(checklist) <= 255),
+	description TEXT NOT NULL DEFAULT '' CHECK (length(description) <= 1000),
+	created_at  TEXT NOT NULL,
+	PRIMARY KEY (user_a, user_b)
+);
+
+INSERT INTO summaries (user_a, user_b, chat, room, score, checklist, description, created_at)
+SELECT user_a, user_b, chat, room, score, checklist, description, created_at FROM summaries_legacy;
+
+DROP TABLE summaries_legacy;
+`
+	if _, err := d.ExecContext(ctx, rebuild); err != nil {
+		return fmt.Errorf("rebuild summaries: %w", err)
+	}
+	if _, err := d.ExecContext(ctx,
+		`CREATE INDEX IF NOT EXISTS idx_summaries_chat ON summaries(chat)`); err != nil {
+		return fmt.Errorf("rebuild summaries index: %w", err)
+	}
+	return d.vacuum(ctx)
 }
 
 // rebuildMessagesWithCap recreates the messages table when its content

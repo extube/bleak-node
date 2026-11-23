@@ -569,7 +569,7 @@ const docTemplate = `{
                         "UserToken": []
                     }
                 ],
-                "description": "Summarizes the chat of the pair, grades the networking checklist (both introduced themselves, found a shared topic, balanced turns, questions answered, warm farewell), merges the checkpoint result with the time-independent match score (POST /api/match/v2) and stores one Summary per pair. The method activates only once: a repeated call for a pair that already has a summary returns the stored record without re-summarizing. Handshakes impact NO value: the method is only reachable for pairs with a mutual handshake anyway (the chat requires both directions), so the soft score entering the merge is driven by shared interests alone. The merged score stays strictly inside (0, 100) and a full match (\u003e 80) is rare: hard = 50 + 50 * tanh((closed - 3) / 2) keeps an average 3/5 chat at the neutral 50 and a perfect 5/5 conversation at 88.08, so the merged score only crosses 80 when the interest-driven soft score is strong as well. Requires the FIRST persona's Bearer token; both users must live in the room and their chat must exist.",
+                "description": "Summarizes the chat FROM THE FIRST USER'S PERSPECTIVE (the subject: how good the networking experience was for them, how useful the learned information is for their future aims and interests growth), grades the 3 strict networking criteria (concrete_followup — exchanged concrete contact details or agreed a specific follow-up step; expertise_exchange — each side learned something concrete about the other's work, skills or projects; reciprocal_dialog — both sides asked follow-up questions and contributed roughly equally) and merges the closed count with the time-independent match score: points = 16 * closed + 0.52 * MatchV2, where MatchV2 = 100 * 2 * exact_interest_matches / (interests of the first + interests of the second) — the pure matching-interest percent of POST /api/match/v2 (no time, no handshakes). Three closed criteria add 48, a full MatchV2 adds 52; the result is pinned strictly inside (0, 100). The summary is stored PER DIRECTION (user_a = requester): a repeated call for the same direction returns the stored record without re-summarizing; the reverse direction (B -\u003e A) is a separate record created by its own request. Requires the FIRST persona's Bearer token; both users must live in the room and their chat must exist.",
                 "consumes": [
                     "application/json"
                 ],
@@ -579,7 +579,7 @@ const docTemplate = `{
                 "tags": [
                     "matching"
                 ],
-                "summary": "hard match of two users",
+                "summary": "hard match of two users (per direction)",
                 "parameters": [
                     {
                         "description": "Hard match request",

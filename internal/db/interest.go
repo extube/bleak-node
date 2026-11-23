@@ -28,10 +28,9 @@ import (
 	"github.com/extube/bleak-node/internal/model"
 )
 
-// Matching-score coefficients. The legacy formula (feature #34,
-// clamp(50 + 50 * (1/2^t) + coef)) is retired; the coefficients survive
-// only in the HARD match's calibrated soft score (db/match.go,
-// matchSoftOn) and may be retuned without contract changes.
+// Matching-score coefficients of the retired legacy formulas (feature #34
+// tanh curve, #35 soft score): kept only for reference — no current formula
+// reads them.
 const (
 	CoefHandshake = 4
 	CoefSameGroup = 2

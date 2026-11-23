@@ -1,5 +1,6 @@
-// The public match-v2 score (feature #36) and the hard match's calibrated
-// soft score.
+// The public match-v2 score (feature #36) — the pure matching-interest
+// percent — and the open-interval clamp shared by the scores that must
+// never read 0 or 100.
 //
 // Public v2 (POST /api/match/v2) is the pure matching-interest percent:
 //
@@ -8,14 +9,8 @@
 // every exact interest match (same group AND key) counts on both sides, so
 // two identical interest sets grade 100 and disjoint sets grade 0. No time
 // and no handshake input: the same interest sets always grade the same.
-//
-// The HARD match (feature #35) keeps its own calibrated soft component
-// (matchSoftOn below): points = 50 + 50 * tanh(coef / SoftTanhScale) with
-// the relation coefficient (+4 per handshake direction, +2 per shared
-// group, +5 per exact match), pinned into the OPEN interval (0, 100).
-// Its result is confined to the OPEN interval (0, 100): 0 and 100 are
-// impossible, so the value stays strictly inside and can never read as a
-// perfect match. The difficulty calibration is documented at SoftTanhScale.
+// The HARD match (feature #43) merges this score with the networking
+// checklist: points = 16 * closed + 0.52 * MatchV2 (db/summary.go).
 package db
 
 import (
@@ -25,21 +20,6 @@ import (
 	"math"
 
 	"github.com/extube/bleak-node/internal/model"
-)
-
-// SoftTanhScale stretches the coefficient so ordinary relation values land
-// in a readable range AND keeps the > 80 full-match zone rare: at scale 12
-// one handshake (coef 4) scores ~66, mutual handshake + one shared group
-// (coef 10) ~84, a plain mutual handshake (coef 8) 79.14 - the calibration
-// is documented in the package comment.
-const SoftTanhScale = 12.0
-
-// soft score bounds after rounding: rounding a value asymptotically close
-// to the endpoints could still print 100.00 or 0.00, so the final result is
-// pinned into the open interval.
-const (
-	softScoreMin = 0.01
-	softScoreMax = 99.99
 )
 
 // MatchPointsV2 computes the matching-interest percent of two personas
@@ -115,66 +95,6 @@ type matchQuerier interface {
 	listQuerier
 }
 
-// matchSoftOn is the HARD match's calibrated soft score (feature #35) on
-// the given executor, so the hard match can compute it inside its own read
-// transaction. countHandshakes selects whether handshake directions weigh
-// in: the standalone soft score counts them, while the HARD MATCH must
-// ignore them entirely (owner directive) - every chatting pair is mutual by
-// construction, so handshake points would be a constant +8 on every summary
-// and say nothing about the pair. The hard match is driven by shared
-// interests and the checkpoint quality alone.
-//
-// This is deliberately NOT the public /api/match/v2 formula anymore
-// (feature #36 turned that endpoint into the pure interest percent): the
-// tanh curve below keeps the hard match's documented difficulty
-// calibration (a full match > 80 stays rare).
-func matchSoftOn(ctx context.Context, q matchQuerier, roomAddress, first, second string, countHandshakes bool) (MatchResult, error) {
-	var res MatchResult
-	for _, addr := range []string{first, second} {
-		var ok bool
-		if err := q.QueryRowContext(ctx,
-			`SELECT EXISTS (SELECT 1 FROM users WHERE address = ? AND room = ? AND deleted_at IS NULL)`,
-			addr, roomAddress).Scan(&ok); err != nil {
-			return res, err
-		}
-		if !ok {
-			return res, errors.Join(ErrNotFound,
-				fmt.Errorf("user %q not found in room %q", addr, roomAddress))
-		}
-	}
-
-	directions := 0
-	if countHandshakes {
-		// Handshake directions between the two personas within the room.
-		if err := q.QueryRowContext(ctx, `
-		SELECT (SELECT EXISTS (SELECT 1 FROM handshakes
-			WHERE room = ? AND from_address = ? AND to_address = ?)) +
-		       (SELECT EXISTS (SELECT 1 FROM handshakes
-			WHERE room = ? AND from_address = ? AND to_address = ?))`,
-			roomAddress, first, second,
-			roomAddress, second, first).Scan(&directions); err != nil {
-			return res, err
-		}
-		res.Handshake = directions > 0
-		res.MutualHandshake = directions == 2
-	}
-
-	// Interests of both personas: exact matches (same group AND key) and
-	// shared groups (the group appears on both sides).
-	var err error
-	_, _, res, err = interestOverlapOn(ctx, q, res, first, second)
-	if err != nil {
-		return res, err
-	}
-
-	coef := CoefHandshake*directions +
-		CoefSameGroup*res.SharedGroups +
-		CoefSameKey*res.ExactMatches
-
-	res.Points = softScore(float64(coef))
-	return res, nil
-}
-
 // interestOverlapOn compares the interest lists of two personas on the
 // given executor: it fills the result's ExactMatches (same group AND key
 // on both sides) and SharedGroups (the group appears on both sides) and
@@ -209,16 +129,9 @@ func interestOverlapOn(ctx context.Context, q matchQuerier, res MatchResult, fir
 	return interestsA, interestsB, res, nil
 }
 
-// softScore maps a non-negative relation coefficient into the open interval
-// (0, 100), rounded to 2 decimals.
-func softScore(coef float64) float64 {
-	p := 50 + 50*math.Tanh(coef/SoftTanhScale)
-	p = math.Round(p*100) / 100
-	return clampOpen(p)
-}
-
 // clampOpen pins a score inside the open interval (0, 100): the endpoints
-// themselves are impossible.
+// themselves are impossible. The bounds absorb the rounding of values
+// asymptotically close to 0 or 100.
 func clampOpen(p float64) float64 {
-	return math.Max(softScoreMin, math.Min(softScoreMax, p))
+	return math.Max(0.01, math.Min(99.99, p))
 }

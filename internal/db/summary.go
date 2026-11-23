@@ -1,8 +1,10 @@
-// Hard matching (feature #35): the summarized, once-only record of a user
-// pair. The method sums up the pair's chat, grades the networking
-// checklist, merges the checkpoint result with the time-independent match
-// score (POST /api/match/v2) and stores ONE summary per pair. A repeated
-// hard-match request returns the stored record instead of re-summarizing.
+// Hard matching (feature #43): the summarized, per-direction record of a
+// user pair. The method sums up the pair's chat, grades the networking
+// checklist, merges the closed count with the time-independent match score
+// (POST /api/match/v2) and stores ONE summary per DIRECTION: a summary for
+// A -> B exists without a B -> A record — the reverse direction is a
+// separate request of its own. A repeated hard-match request for the same
+// direction returns the stored record instead of re-summarizing.
 package db
 
 import (
@@ -18,13 +20,14 @@ import (
 	"github.com/extube/bleak-node/internal/model"
 )
 
-// HardCheckpointCenter and HardCheckpointSpread shape the checkpoint -> hard
-// score curve (see buildSummary): center = the closed count that grades as
-// the neutral midpoint, spread = how sharply the score reacts to better or
-// worse conversations.
+// Summary weights (feature #43): the checklist carries 48% of the score
+// (3 criteria, 16 points each), the time-independent match score carries
+// 52%.
 const (
-	HardCheckpointCenter = 3.0
-	HardCheckpointSpread = 2.0
+	summaryCheckpoints    = 3
+	summaryItemPoints     = 16.0
+	summaryChecklistShare = summaryCheckpoints * summaryItemPoints // 48
+	summaryMatchShare     = 0.52
 )
 
 // SummaryInput is what a chat summarizer feeds into the hard match: the
@@ -36,45 +39,69 @@ type SummaryInput struct {
 }
 
 // SummarizeFunc summarizes one chat's transcript into the summary input.
-// It is called only when the pair has no stored summary yet.
-type SummarizeFunc func(ctx context.Context, chat model.Chat, msgs []model.Message) (SummaryInput, error)
+// `subject` is the user the summary is FOR (the requester): the grading and
+// the description judge the conversation from their perspective. It is
+// called only when that direction has no stored summary yet.
+type SummarizeFunc func(ctx context.Context, chat model.Chat, msgs []model.Message, subject string) (SummaryInput, error)
 
 // HardMatch runs the hard match of two personas inside one room:
 //
 //  1. both users must live in the room and differ (ErrNotFound / ErrInvalid);
+//
 //  2. the pair must have a chat (created once both handshake directions
 //     exist) - ErrNotFound otherwise;
-//  3. a stored summary returns as-is (created=false; the method runs only
-//     once per pair);
-//  4. otherwise the chat transcript is summarized, the checkpoint result is
-//     merged with the soft (time-independent) score and the record is
-//     stored. The merged score:
 //
-//     points = round2((soft + hard) / 2),  hard = 100 * closed / checkpoints
+//  3. a stored summary FOR THIS DIRECTION (first -> second) returns as-is
+//     (created=false; the method runs only once per direction — the
+//     reverse direction is a separate record);
 //
-//     soft is always strictly inside (0, 100), so the merged value is too;
-//     the summaries table CHECK constraint enforces the open interval.
+//  4. otherwise the chat transcript is summarized, the closed count is
+//     merged with the time-independent match score (MatchPointsV2) and the
+//     record is stored under the requester's direction:
+//
+//     points = 16 * closed + 0.52 * MatchV2
+//
+//     with MatchV2 = 100 * 2 * exactInterestMatches /
+//     (interests of the first + interests of the second) — the pure
+//     matching-interest percent, no time and no handshakes. Three closed
+//     criteria add 48, a full MatchV2 adds 52, so the merged score spans
+//     (0, 100) and is pinned into the open interval by the summaries table
+//     CHECK constraint.
 func (d *DB) HardMatch(ctx context.Context, roomAddress, first, second string, summarize SummarizeFunc) (model.Summary, bool, error) {
 	if first == second {
 		return model.Summary{}, false, errors.Join(ErrInvalid,
 			errors.New("first_user_address and second_user_address must differ"))
 	}
 
-	// ---- read phase: validation, chat, soft score, existing summary ----
+	// ---- read phase: validation, chat, match-v2 score, existing summary ----
 	tx, err := d.BeginTx(ctx, nil)
 	if err != nil {
 		return model.Summary{}, false, err
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// Handshakes weigh in NOTHING here (owner directive): hard matching is
-	// only reachable for pairs with a mutual handshake anyway (the chat
-	// requires both directions), so handshake points would be a constant
-	// +8 on every summary. The soft score entering the merge is driven by
-	// shared interests alone; countHandshakes=false.
-	soft, err := matchSoftOn(ctx, tx, roomAddress, first, second, false)
+	// The merge input is the PUBLIC match v2 formula (feature #43): the
+	// pure matching-interest percent, no time and no handshakes. Computed
+	// inline on the read transaction (MatchPointsV2 itself opens one, and
+	// the single-connection pool would deadlock on the nested call).
+	for _, addr := range []string{first, second} {
+		ok, err := d.userInRoomOn(ctx, tx, roomAddress, addr)
+		if err != nil {
+			return model.Summary{}, false, err
+		}
+		if !ok {
+			return model.Summary{}, false, errors.Join(ErrNotFound,
+				fmt.Errorf("user %q not found in room %q", addr, roomAddress))
+		}
+	}
+	interestsA, interestsB, overlap, err := interestOverlapOn(ctx, tx, MatchResult{}, first, second)
 	if err != nil {
 		return model.Summary{}, false, err
+	}
+	total := len(interestsA) + len(interestsB)
+	v2 := 0.0
+	if total > 0 {
+		v2 = math.Round(100*(2*float64(overlap.ExactMatches)/float64(total))*100) / 100
 	}
 
 	chat, found, err := findChat(ctx, tx, first, second)
@@ -86,7 +113,7 @@ func (d *DB) HardMatch(ctx context.Context, roomAddress, first, second string, s
 			"chat between %q and %q not found: handshakes in both directions are required", first, second))
 	}
 
-	if existing, found, err := summaryByPairOn(ctx, tx, chat.Address); err != nil {
+	if existing, found, err := summaryByDirectionOn(ctx, tx, first, second); err != nil {
 		return model.Summary{}, false, err
 	} else if found {
 		return existing, false, tx.Commit()
@@ -103,7 +130,7 @@ func (d *DB) HardMatch(ctx context.Context, roomAddress, first, second string, s
 	if summarize == nil {
 		return model.Summary{}, false, errors.Join(ErrInvalid, errors.New("no summarizer configured"))
 	}
-	in, err := summarize(ctx, chat, msgs)
+	in, err := summarize(ctx, chat, msgs, first)
 	if err != nil {
 		return model.Summary{}, false, err
 	}
@@ -115,13 +142,13 @@ func (d *DB) HardMatch(ctx context.Context, roomAddress, first, second string, s
 	}
 	defer func() { _ = wtx.Rollback() }()
 
-	if existing, found, err := summaryByPairOn(ctx, wtx, chat.Address); err != nil {
+	if existing, found, err := summaryByDirectionOn(ctx, wtx, first, second); err != nil {
 		return model.Summary{}, false, err
 	} else if found {
 		return existing, false, wtx.Commit()
 	}
 
-	summary, err := buildSummary(chat, first, second, soft, in)
+	summary, err := buildSummary(chat, first, second, v2, in)
 	if err != nil {
 		return model.Summary{}, false, err
 	}
@@ -135,10 +162,11 @@ func (d *DB) HardMatch(ctx context.Context, roomAddress, first, second string, s
 		summary.Chat, summary.Room, summary.UserA, summary.UserB, summary.Score,
 		string(checklist), summary.Description,
 		summary.CreatedAt.Format(time.RFC3339)); err != nil {
-		// A concurrent hard match of the same pair won the race: return its
-		// record (the method stays once-only even under concurrency).
+		// A concurrent hard match of the same direction won the race:
+		// return its record (the method stays once-only per direction
+		// even under concurrency).
 		if isUnique(err) {
-			if existing, found, err2 := summaryByPairOn(ctx, wtx, chat.Address); err2 == nil && found {
+			if existing, found, err2 := summaryByDirectionOn(ctx, wtx, first, second); err2 == nil && found {
 				return existing, false, wtx.Commit()
 			}
 		}
@@ -147,20 +175,21 @@ func (d *DB) HardMatch(ctx context.Context, roomAddress, first, second string, s
 	return summary, true, wtx.Commit()
 }
 
-// buildSummary assembles the stored summary record: the canonical
-// (user_a < user_b) pair, the merged score and the rehydrated checkpoint
-// list. The description is capped at MaxSummaryDescriptionLen symbols.
+// buildSummary assembles the stored summary record: the DIRECTIONAL pair
+// (user_a = the requester the summary is for, user_b = the other side), the
+// merged score and the rehydrated checkpoint list. The description is
+// capped at MaxSummaryDescriptionLen symbols.
 //
-// The checkpoint result maps to the hard score with the same difficulty
-// spirit as the soft score (owner directive: a full match > 80 must stay
-// rare, ~20% of pairs):
+// The merged score (feature #43):
 //
-//	hard = 50 + 50 * tanh((closed - HardCheckpointCenter) / HardCheckpointSpread)
+//	points = 16 * closed + 0.52 * MatchV2
 //
-// An average chat (3 of 5 checkpoints closed) stays at the neutral 50; a
-// perfect 5/5 conversation tops out at 88.08 instead of an instant 100, so
-// the merged score only crosses 80 when the soft score is strong as well.
-func buildSummary(chat model.Chat, first, second string, soft MatchResult, in SummaryInput) (model.Summary, error) {
+// with MatchV2 = 100 * 2 * exactInterestMatches / (interests of the first +
+// interests of the second) — the pure matching-interest percent, no time
+// and no handshakes. Three closed criteria add 48, a full MatchV2 adds 52;
+// the result is rounded to 2 decimals and pinned into the open interval
+// (0, 100) — the summaries table CHECK constraint enforces it.
+func buildSummary(chat model.Chat, first, second string, matchV2 float64, in SummaryInput) (model.Summary, error) {
 	checkpoints := model.NetworkingCheckpoints(chat.Language)
 	// Normalize the closed flags against the canonical checklist: missing
 	// entries count as closed=false, extra entries are ignored.
@@ -171,9 +200,8 @@ func buildSummary(chat model.Chat, first, second string, soft MatchResult, in Su
 			closedCount++
 		}
 	}
-	hard := 50 + 50*math.Tanh(
-		(float64(closedCount)-HardCheckpointCenter)/HardCheckpointSpread)
-	merged := math.Round((soft.Points+hard)/2*100) / 100
+	merged := summaryItemPoints*float64(closedCount) + summaryMatchShare*matchV2
+	merged = math.Round(merged*100) / 100
 	merged = clampOpen(merged)
 
 	description := in.Description
@@ -181,15 +209,11 @@ func buildSummary(chat model.Chat, first, second string, soft MatchResult, in Su
 		description = string([]rune(description)[:model.MaxSummaryDescriptionLen])
 	}
 
-	a, b := first, second
-	if b < a {
-		a, b = b, a
-	}
 	return model.Summary{
 		Chat:        chat.Address,
 		Room:        chat.Room,
-		UserA:       a,
-		UserB:       b,
+		UserA:       first,  // the requester: the summary is FOR this user
+		UserB:       second, // the other side of the conversation
 		Score:       merged,
 		Checkpoints: checkpoints,
 		Description: description,
@@ -197,13 +221,15 @@ func buildSummary(chat model.Chat, first, second string, soft MatchResult, in Su
 	}, nil
 }
 
-// summaryByPairOn loads the stored summary of a pair (canonical a < b or
-// the reverse), on the given executor. The bool reports whether one exists.
-func summaryByPairOn(ctx context.Context, q rowQuerier, chatAddress string) (model.Summary, bool, error) {
+// summaryByDirectionOn loads the stored summary of ONE direction
+// (user_a = requester, user_b = the other side), on the given executor.
+// The reverse direction is a separate record. The bool reports whether one
+// exists.
+func summaryByDirectionOn(ctx context.Context, q rowQuerier, first, second string) (model.Summary, bool, error) {
 	row := q.QueryRowContext(ctx, `
 SELECT s.chat, s.room, s.user_a, s.user_b, s.score, s.checklist, s.description, s.created_at,
        (SELECT language FROM chats c WHERE c.address = s.chat)
-FROM summaries s WHERE s.chat = ?`, chatAddress)
+FROM summaries s WHERE s.user_a = ? AND s.user_b = ?`, first, second)
 
 	var (
 		s         model.Summary
