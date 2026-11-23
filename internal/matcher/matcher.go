@@ -1,27 +1,31 @@
-// Package matcher runs the auto-matchmaking worker (feature #36): once
-// every 10 minutes it ranks the active personas of every live room and
-// automatically sends the top handshakes.
+// Package matcher runs the auto-matchmaking worker (feature #41): once
+// every 5 minutes it ranks the active personas of every live room and
+// automatically sends the best handshakes.
 //
 // One job:
 //
 //  1. fetch every room with at least one active invite code (not revoked,
 //     not expired) — rooms host live events, the rest is idle;
 //  2. fetch the room's ACTIVE users (active = true, not deleted);
-//  3. build the matching-point matrix: for every active user X the score
-//     of X against every other active user Y, computed by the match-point
-//     function of POST /api/match — 100 * (1 - 1/(C * 2^t)) with t the
-//     hours since X's creation;
-//  4. for every X: skip the users X already shook hands with, order the
-//     rest by points (desc, address asc for determinism) and send the
-//     handshake X → Y for the top 3. Sending goes through the regular
-//     handshake path (idempotent per directed pair, balance rule intact,
-//     auto-chat on mutuality).
+//  3. build the PAIR POOL: every directed pair X -> Y of the active users
+//     with its match points from POST /api/match —
+//     100 * (1 - 1/2^(sqrt(t) * (1 + 3.522 * C))), the score computed AS
+//     the sender X (t = hours since X's last sent handshake, or since
+//     their creation when they never sent one);
+//  4. sort the whole pool by points (desc; sender address, then receiver
+//     address break ties), drop the pairs that already carry a directed
+//     handshake (the slots go to NEW acquaintances) and send the handshake
+//     X -> Y for the top 2 * floor(sqrt(active users)) pairs — with three
+//     active users that is the TWO best pairs, e.g. A -> B and B -> C.
+//     Sending goes through the regular handshake path (idempotent per
+//     directed pair, balance rule intact, auto-chat on mutuality).
 package matcher
 
 import (
 	"context"
 	"errors"
 	"log/slog"
+	"math"
 	"sort"
 	"time"
 
@@ -32,10 +36,15 @@ import (
 // Job tuning.
 const (
 	// Interval is how often the worker performs one matching job.
-	Interval = 10 * time.Minute
-	// TopK is how many handshakes one user receives per job at most.
-	TopK = 3
+	Interval = 5 * time.Minute
 )
+
+// pairBudget caps the handshakes one job sends per room: twice the square
+// root of the room's ACTIVE user count, floored (three active users budget
+// the two best pairs, nine budget six, sixteen eight).
+func pairBudget(activeUsers int) int {
+	return 2 * int(math.Sqrt(float64(activeUsers)))
+}
 
 // Worker runs the auto-matchmaking job on its interval until ctx is done.
 type Worker struct {
@@ -71,11 +80,11 @@ func (w *Worker) Run(ctx context.Context) {
 	}
 }
 
-// candidate is one row of a user's matrix: a possible handshake target
-// with its match points.
-type candidate struct {
-	address string
-	points  float64
+// matchPair is one entry of the room's pair pool: a possible handshake
+// X -> Y with its match points (scored as the sender X).
+type matchPair struct {
+	from, to string
+	points   float64
 }
 
 // RunOnce performs one full matching job over all live rooms.
@@ -93,8 +102,8 @@ func (w *Worker) RunOnce(ctx context.Context) error {
 	return nil
 }
 
-// matchRoom builds the matching-point matrix of one room's active users
-// and sends the top-3 handshakes per user.
+// matchRoom ranks every directed pair of one room's active users and sends
+// the top 2*floor(sqrt(users)) handshakes.
 func (w *Worker) matchRoom(ctx context.Context, room model.Room) error {
 	users, err := w.db.ListActiveRoomUsers(ctx, room.Address)
 	if err != nil {
@@ -104,75 +113,73 @@ func (w *Worker) matchRoom(ctx context.Context, room model.Room) error {
 		return nil
 	}
 
-	sent := 0
+	// The pair pool: every directed pair of active users with its match
+	// score, computed AS the sender (the formula's t is the sender's
+	// clock — hours since their last sent handshake, or since their
+	// creation when they never sent one). All scores are taken BEFORE the
+	// first send of the job, so the ranking is one consistent snapshot.
+	pool := make([]matchPair, 0, len(users)*(len(users)-1))
 	for i := range users {
-		from := users[i]
-
-		// Matrix row of `from`: the match score against every other active
-		// user of the room (the score is computed AS `from` — the formula's
-		// t is the hours since their last sent handshake, or since their
-		// creation when they never sent one).
-		row := make([]candidate, 0, len(users)-1)
 		for j := range users {
-			to := users[j]
-			if to.Address == from.Address {
+			if i == j {
 				continue
 			}
+			from, to := users[i], users[j]
 			res, err := w.db.MatchPoints(ctx, room.Address, from.Address, to.Address)
 			if err != nil {
 				return err
 			}
-			row = append(row, candidate{address: to.Address, points: res.Points})
+			pool = append(pool, matchPair{from: from.Address, to: to.Address, points: res.Points})
 		}
+	}
 
-		// Highest score first; the address breaks ties deterministically.
-		sort.Slice(row, func(a, b int) bool {
-			if row[a].points != row[b].points {
-				return row[a].points > row[b].points
-			}
-			return row[a].address < row[b].address
+	// Highest score first; sender then receiver address break ties.
+	sort.Slice(pool, func(a, b int) bool {
+		if pool[a].points != pool[b].points {
+			return pool[a].points > pool[b].points
+		}
+		if pool[a].from != pool[b].from {
+			return pool[a].from < pool[b].from
+		}
+		return pool[a].to < pool[b].to
+	})
+
+	// Send the best pairs within the budget. An existing directed pair
+	// would make the send a no-op, so those are dropped BEFORE the budget
+	// cut — the slots go to the best NEW acquaintances.
+	budget := pairBudget(len(users))
+	sent := 0
+	for _, p := range pool {
+		if sent == budget {
+			break
+		}
+		exists, err := w.db.HandshakeExists(ctx, p.from, p.to)
+		if err != nil {
+			return err
+		}
+		if exists {
+			continue
+		}
+		created, err := w.db.CreateHandshake(ctx, &model.Handshake{
+			FromAddress: p.from,
+			ToAddress:   p.to,
+			Status:      model.DefaultStatus,
 		})
-
-		// Top-K among the users `from` has no handshake with yet: re-sending
-		// an existing directed pair is a no-op, so the K slots go to the best
-		// NEW acquaintances.
-		targets := make([]candidate, 0, TopK)
-		for _, c := range row {
-			if len(targets) == TopK {
-				break
-			}
-			exists, err := w.db.HandshakeExists(ctx, from.Address, c.address)
-			if err != nil {
-				return err
-			}
-			if exists {
+		if err != nil {
+			if errors.Is(err, db.ErrBalance) {
+				// The income>outcome rule blocks the sender: skip (they
+				// can send again once they receive).
+				w.log.Warn("auto handshake blocked by balance",
+					"room", room.Address, "from", p.from, "to", p.to)
 				continue
 			}
-			targets = append(targets, c)
+			return err
 		}
-
-		for _, c := range targets {
-			created, err := w.db.CreateHandshake(ctx, &model.Handshake{
-				FromAddress: from.Address,
-				ToAddress:   c.address,
-				Status:      model.DefaultStatus,
-			})
-			if err != nil {
-				if errors.Is(err, db.ErrBalance) {
-					// The income>outcome rule blocks the sender: skip (they
-					// can send again once they receive).
-					w.log.Warn("auto handshake blocked by balance",
-						"room", room.Address, "from", from.Address, "to", c.address)
-					continue
-				}
-				return err
-			}
-			if created {
-				sent++
-				w.log.Info("auto handshake sent",
-					"room", room.Address, "from", from.Address, "to", c.address,
-					"points", c.points)
-			}
+		if created {
+			sent++
+			w.log.Info("auto handshake sent",
+				"room", room.Address, "from", p.from, "to", p.to,
+				"points", p.points)
 		}
 	}
 	if sent > 0 {
