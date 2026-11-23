@@ -225,27 +225,27 @@ func TestMatchEndpoint(t *testing.T) {
 
 	// Exact match: matched/total = 1/3, no handshakes (factor 2) ->
 	// C = 2/3; t = 1h (creation fallback) ->
-	// sqrt(1 + 2/3) = 1.291 -> 100 * (1 - 1/2^1.291) = 59.13.
+	// exponent = sqrt(1) * (1 + 3.522 * 2/3) = 3.348 -> 90.18.
 	addTestInterests(t, ts.URL, room, bob, bobToken, `{"title":"Chess","group":1,"key":7}`)
 	_, res = matchPoints(t, ts.URL, room, alice, bob, aliceToken)
-	if math.Abs(res["points"].(float64)-59.13) > 0.05 || res["exact_interest_matches"].(float64) != 1 {
-		t.Fatalf("exact match: want ~59.13, got %v", res)
+	if math.Abs(res["points"].(float64)-90.18) > 0.05 || res["exact_interest_matches"].(float64) != 1 {
+		t.Fatalf("exact match: want ~90.18, got %v", res)
 	}
 
 	// One-sided handshake (H_s = 1, factor 3 -> C = 3 * 1/3 = 1). Alice's
-	// newest sent handshake is seconds old, so t ~ 0 and the relation
-	// floors the summand: sqrt(0 + 1) = 1 -> ~50.
+	// newest sent handshake is seconds old, so t ~ 0 zeroes the exponent:
+	// points ~ 0 (the "just reached out" reset).
 	sendTestHandshake(t, ts.URL, alice, aliceToken, bob)
 	_, res = matchPoints(t, ts.URL, room, alice, bob, aliceToken)
-	if p := res["points"].(float64); p < 49 || p > 51 || res["handshake"] != true {
-		t.Fatalf("one-sided handshake: want ~50 (relation floor), got %v", res)
+	if p := res["points"].(float64); p > 5 || res["handshake"] != true {
+		t.Fatalf("one-sided handshake: want ~0 (fresh outreach), got %v", res)
 	}
 
-	// Mutual handshake: H_r = 1 doubles the factor -> C = 5/3 ->
-	// sqrt(0 + 5/3) = 1.291 -> ~59.1.
+	// Mutual handshake: H_r = 1 doubles the factor -> C = 5/3, but alice's
+	// clock is still seconds old (t ~ 0) -> points ~ 0.
 	sendTestHandshake(t, ts.URL, bob, bobToken, alice)
 	_, res = matchPoints(t, ts.URL, room, alice, bob, aliceToken)
-	if p := res["points"].(float64); p < 58 || p > 60 || res["mutual_handshake"] != true {
-		t.Fatalf("mutual handshake: want ~59.1 (relation floor), got %v", res)
+	if p := res["points"].(float64); p > 8 || res["mutual_handshake"] != true {
+		t.Fatalf("mutual handshake: want ~0 (fresh outreach), got %v", res)
 	}
 }

@@ -1006,17 +1006,18 @@ paths:
       consumes:
       - application/json
       description: 'Computes the matching points (0..100) of two personas inside one
-        room: points = 100 * (1 - 1/2^sqrt(t + C)) with t the hours (float) since
-        the FIRST persona''s last sent handshake in the room (since their creation
-        when they never sent one; computed server-side; the request carries no time)
-        and C = (2 + 2*H_r + 1*H_s) * matched_interests / total_interests_both_sides,
+        room: points = 100 * (1 - 1/2^(sqrt(t) * (1 + 3.522 * C))) with t the hours
+        (float) since the FIRST persona''s last sent handshake in the room (since
+        their creation when they never sent one; computed server-side; the request
+        carries no time) and C = (2 + 2*H_r + 1*H_s) * matched_interests / total_interests_both_sides,
         where H_r is 1 when the OTHER persona''s directed handshake to the first exists
         in the room (received handshakes count double), H_s is 1 when the first persona''s
         handshake to the other exists, and matched/total is the exact interest matches
         (same group AND key, counted on both sides) over the interests total of both
-        personas. C lives inside the sqrt as a summand — a unit of relation acts like
-        an extra hour of idle time; a pair with no relation grows on age alone. Requires
-        the FIRST persona''s Bearer token; both users must live in the room.'
+        personas. C multiplies the age term: a relation-less pair grows on age alone,
+        every unit of relation speeds the saturation up 3.522x; a fresh persona reads
+        ~0 whatever the relation. Requires the FIRST persona''s Bearer token; both
+        users must live in the room.'
       parameters:
       - description: Match request
         in: body

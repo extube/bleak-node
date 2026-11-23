@@ -7,7 +7,7 @@
 //
 //	points = 100 * (1 - 1 / (C * 2^t))
 //
-// points = 100 * (1 - 1 / 2^sqrt(t + C))
+// points = 100 * (1 - 1 / 2^(sqrt(t) * (1 + 3.522 * C)))
 //
 // with t the hours (float) since the FIRST persona's last SENT handshake —
 // the user the score is "for" (the auto-match matrix row); a persona that
@@ -220,7 +220,7 @@ type listQuerier interface {
 // (feature #39 formula). Both users must live in the room (ErrNotFound
 // otherwise) and differ (ErrInvalid). The score:
 //
-//	points = 100 * (1 - 1 / 2^sqrt(t + C))
+//	points = 100 * (1 - 1 / 2^(sqrt(t) * (1 + 3.522 * C)))
 //
 // with t the hours (float) since the FIRST persona's last SENT handshake in
 // the room — the user the score is "for" (the auto-match matrix row); a
@@ -239,12 +239,12 @@ type listQuerier interface {
 //	    the interests total of both personas; a pair with no interests at
 //	    all grades C = 0.
 //
-// The coefficient lives INSIDE the square root as a SUMMAND: sqrt(t + C)
-// treats a unit of relation like an extra hour of idle time. A pair with
-// no relation (C = 0) grows on age alone — 50 after an hour, 75 after
-// four — while every shared interest and handshake direction pulls the
-// saturation (100) closer. The result is clamped into [0, 100] and
-// rounded to 2 decimals.
+// The coefficient MULTIPLIES the age term: the exponent is
+// sqrt(t) * (1 + 3.522 * C) — a relation-less pair (C = 0) grows on age
+// alone (50 after an hour, 75 after four), while every unit of relation
+// speeds the saturation (100) up by 3.522x. A fresh persona reads ~0
+// whatever the relation: the clock always starts at the last outreach.
+// The result is clamped into [0, 100] and rounded to 2 decimals.
 func (d *DB) MatchPoints(ctx context.Context, roomAddress, first, second string) (MatchResult, error) {
 	var res MatchResult
 	if first == second {
@@ -319,9 +319,9 @@ func (d *DB) MatchPoints(ctx context.Context, roomAddress, first, second string)
 	// t: hours since the FIRST persona's last SENT handshake in the room
 	// (the recency of their last outreach); a persona that never sent one
 	// falls back to their creation age. Never negative — a future
-	// timestamp counts as brand new. C lives INSIDE the sqrt as a
-	// summand — a unit of relation acts like an extra hour:
-	// points = 100 * (1 - 1 / 2^sqrt(t + C)).
+	// timestamp counts as brand new. C MULTIPLIES the age term — the
+	// exponent is sqrt(t) * (1 + 3.522 * C): a unit of relation speeds
+	// the saturation up 3.522x.
 	var lastSent sql.NullString
 	if err := tx.QueryRowContext(ctx,
 		`SELECT MAX(created_at) FROM handshakes WHERE room = ? AND from_address = ?`,
@@ -336,7 +336,7 @@ func (d *DB) MatchPoints(ctx context.Context, roomAddress, first, second string)
 		t = 0
 	}
 
-	res.Points = 100 * (1 - 1/math.Pow(2, math.Sqrt(t+c)))
+	res.Points = 100 * (1 - 1/math.Pow(2, math.Sqrt(t)*(1+3.522*c)))
 	// Clamp into [0, 100]; round to 2 decimals so clients see clean numbers.
 	res.Points = math.Max(0, math.Min(100, res.Points))
 	res.Points = math.Round(res.Points*100) / 100

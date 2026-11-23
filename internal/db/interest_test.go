@@ -207,7 +207,7 @@ func TestMatchPointsFormula(t *testing.T) {
 
 	// Exact match (same group AND key): matched/total = 1/3, no handshakes
 	// (factor 2) -> C = 2/3; t = 1 (creation fallback) ->
-	// sqrt(1 + 2/3) = 1.291 -> 100 * (1 - 1/2^1.291) = 59.13.
+	// exponent = sqrt(1) * (1 + 3.522 * 2/3) = 3.348 -> 90.18.
 	if _, err := db.AddUserInterests(ctx, room, bob, []model.Interest{{Title: "Chess", Group: 1, Key: 7}}); err != nil {
 		t.Fatalf("add B exact: %v", err)
 	}
@@ -215,46 +215,46 @@ func TestMatchPointsFormula(t *testing.T) {
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
-	if math.Abs(res.Points-59.13) > 0.05 || res.ExactMatches != 1 || res.SharedGroups != 1 {
-		t.Fatalf("exact match: want ~59.13, got %v (%+v)", res.Points, res)
+	if math.Abs(res.Points-90.18) > 0.05 || res.ExactMatches != 1 || res.SharedGroups != 1 {
+		t.Fatalf("exact match: want ~90.18, got %v (%+v)", res.Points, res)
 	}
 
 	// One-sided handshake FROM alice (sent 1h ago; the carol handshake
 	// keeps bob's pair the only scored one): H_s = 1, H_r = 0 ->
-	// C = 3 * 1/3 = 1 -> sqrt(1 + 1) = 1.414 -> 62.48.
+	// C = 3 * 1/3 = 1 -> exponent = 1 * (1 + 3.522) = 4.522 -> 95.65.
 	seedHandshake(t, db, alice, carol, 1)
 	seedHandshake(t, db, alice, bob, 1)
 	res, err = db.MatchPoints(ctx, room, alice, bob)
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
-	if math.Abs(res.Points-62.48) > 0.05 || !res.Handshake || res.MutualHandshake {
-		t.Fatalf("one-sided handshake: want ~62.48, got %v (%+v)", res.Points, res)
+	if math.Abs(res.Points-95.65) > 0.05 || !res.Handshake || res.MutualHandshake {
+		t.Fatalf("one-sided handshake: want ~95.65, got %v (%+v)", res.Points, res)
 	}
 
 	// Mutual handshake: H_r = 1 doubles the factor -> C = 5 * 1/3 = 5/3 ->
-	// sqrt(1 + 5/3) = 1.633 -> 67.76.
+	// exponent = 1 * (1 + 3.522 * 5/3) = 6.87 -> 99.15.
 	seedHandshake(t, db, bob, alice, 1)
 	res, err = db.MatchPoints(ctx, room, alice, bob)
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
-	if math.Abs(res.Points-67.76) > 0.05 || !res.MutualHandshake {
-		t.Fatalf("mutual handshake: want ~67.76, got %v (%+v)", res.Points, res)
+	if math.Abs(res.Points-99.15) > 0.05 || !res.MutualHandshake {
+		t.Fatalf("mutual handshake: want ~99.15, got %v (%+v)", res.Points, res)
 	}
 
-	// The sqrt growth: backdating ALL of alice's sent handshakes to 4h
-	// gives t = 4 -> sqrt(4 + 5/3) = 2.38 -> 80.8 (the expected value is
-	// derived from the spec formula to pin the exponent wiring).
+	// The multiplier wiring: backdating ALL of alice's sent handshakes to
+	// 4h doubles the sqrt term -> exponent = 2 * (1 + 3.522 * 5/3) = 13.74
+	// (the expected value is derived from the spec formula).
 	seedHandshake(t, db, alice, carol, 4)
 	seedHandshake(t, db, alice, bob, 4)
 	res, err = db.MatchPoints(ctx, room, alice, bob)
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
-	expected := 100 * (1 - 1/math.Pow(2, math.Sqrt(4+5.0/3.0)))
+	expected := 100 * (1 - 1/math.Pow(2, math.Sqrt(4)*(1+3.522*5.0/3.0)))
 	if math.Abs(res.Points-expected) > 0.05 {
-		t.Fatalf("t=4 inside the sqrt: want ~%.2f, got %v (%+v)", expected, res.Points, res)
+		t.Fatalf("t=4 in the sqrt multiplier: want ~%.2f, got %v (%+v)", expected, res.Points, res)
 	}
 }
 
@@ -265,7 +265,7 @@ func TestMatchPointsSaturation(t *testing.T) {
 
 	// One identical interest on both sides: C = 2 * 1/2 = 1. A long idle
 	// time since the last outreach (creation fallback: none was sent)
-	// saturates the sqrt growth at 100.
+	// saturates the growth at 100.
 	backdateUser(t, db, alice, 4000)
 	if _, err := db.AddUserInterests(ctx, room, alice, []model.Interest{{Title: "Chess", Group: 1, Key: 7}}); err != nil {
 		t.Fatalf("add A: %v", err)
@@ -282,26 +282,25 @@ func TestMatchPointsSaturation(t *testing.T) {
 	}
 
 	// The other side's clock does not matter: t comes from the FIRST user
-	// only. The mirrored call with a fresh first user reads t ~ 0, but the
-	// relation C = 1 floors the summand: sqrt(0 + 1) = 1 -> 50.
+	// only. The mirrored call with a fresh first user reads t ~ 0 ->
+	// exponent ~ 0 -> ~0 whatever the relation.
 	res, err = db.MatchPoints(ctx, room, bob, alice)
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
-	if math.Abs(res.Points-50) > 0.05 {
-		t.Fatalf("mirrored call must use the first user's clock (C floors at 50): got %v", res.Points)
+	if res.Points > 5 {
+		t.Fatalf("mirrored call must use the first user's clock, got %v", res.Points)
 	}
 
 	// A fresh handshake RESETS the sender's t: right after alice reaches
-	// out, her row drops from the saturated 100 back to her relation floor
-	// (t ~ 0, C = 1.5 -> sqrt(1.5) = 1.225 -> ~57.2; the "just matched,
-	// look elsewhere for now" effect).
+	// out, her row drops from the saturated 100 back to ~0 (t ~ 0 zeroes
+	// the exponent; the "just matched, look elsewhere for now" effect).
 	seedHandshake(t, db, alice, bob, 0)
 	res, err = db.MatchPoints(ctx, room, alice, bob)
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
-	if res.Points < 55 || res.Points > 59 {
+	if res.Points > 8 {
 		t.Fatalf("fresh outreach must reset t to ~0, got %v", res.Points)
 	}
 }
