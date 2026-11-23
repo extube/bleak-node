@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -73,6 +74,26 @@ func (d *DB) HardMatch(ctx context.Context, roomAddress, first, second string, s
 			errors.New("first_user_address and second_user_address must differ"))
 	}
 
+	// Persona names: the summarizer and the stored description speak in
+	// NAMES — raw addresses must not leak into the summary text.
+	firstUser, found, err := d.UserByAddress(ctx, first)
+	if err != nil {
+		return model.Summary{}, false, err
+	}
+	if !found {
+		return model.Summary{}, false, errors.Join(ErrNotFound,
+			fmt.Errorf("user %q not found", first))
+	}
+	secondUser, found, err := d.UserByAddress(ctx, second)
+	if err != nil {
+		return model.Summary{}, false, err
+	}
+	if !found {
+		return model.Summary{}, false, errors.Join(ErrNotFound,
+			fmt.Errorf("user %q not found", second))
+	}
+	names := map[string]string{firstUser.Address: firstUser.Name, secondUser.Address: secondUser.Name}
+
 	// ---- read phase: validation, chat, match-v2 score, existing summary ----
 	tx, err := d.BeginTx(ctx, nil)
 	if err != nil {
@@ -130,7 +151,20 @@ func (d *DB) HardMatch(ctx context.Context, roomAddress, first, second string, s
 	if summarize == nil {
 		return model.Summary{}, false, errors.Join(ErrInvalid, errors.New("no summarizer configured"))
 	}
-	in, err := summarize(ctx, chat, msgs, first)
+	// The transcript is presented to the summarizer with persona NAMES
+	// instead of addresses: the LLM (and the heuristic) then reason and
+	// write in names, and no 0x-address can leak into the summary text.
+	named := make([]model.Message, len(msgs))
+	for i, m := range msgs {
+		named[i] = m
+		if n, ok := names[m.From]; ok {
+			named[i].From = n
+		}
+		if n, ok := names[m.To]; ok {
+			named[i].To = n
+		}
+	}
+	in, err := summarize(ctx, chat, named, names[first])
 	if err != nil {
 		return model.Summary{}, false, err
 	}
@@ -148,7 +182,7 @@ func (d *DB) HardMatch(ctx context.Context, roomAddress, first, second string, s
 		return existing, false, wtx.Commit()
 	}
 
-	summary, err := buildSummary(chat, first, second, v2, in)
+	summary, err := buildSummary(chat, first, second, names, v2, in)
 	if err != nil {
 		return model.Summary{}, false, err
 	}
@@ -178,7 +212,10 @@ func (d *DB) HardMatch(ctx context.Context, roomAddress, first, second string, s
 // buildSummary assembles the stored summary record: the DIRECTIONAL pair
 // (user_a = the requester the summary is for, user_b = the other side), the
 // merged score and the rehydrated checkpoint list. The description is
-// capped at MaxSummaryDescriptionLen symbols.
+// capped at MaxSummaryDescriptionLen symbols AND scrubbed of raw persona
+// addresses — every known address is replaced by the persona's name, so a
+// 0x-address never leaks into the summary text even if the summarizer
+// echoed one back.
 //
 // The merged score (feature #49):
 //
@@ -189,7 +226,7 @@ func (d *DB) HardMatch(ctx context.Context, roomAddress, first, second string, s
 // and no handshakes. Three closed criteria add 66, a full MatchV2 adds 34;
 // the result is rounded to 2 decimals and pinned into the open interval
 // (0, 100) — the summaries table CHECK constraint enforces it.
-func buildSummary(chat model.Chat, first, second string, matchV2 float64, in SummaryInput) (model.Summary, error) {
+func buildSummary(chat model.Chat, first, second string, names map[string]string, matchV2 float64, in SummaryInput) (model.Summary, error) {
 	checkpoints := model.NetworkingCheckpoints(chat.Language)
 	// Normalize the closed flags against the canonical checklist: missing
 	// entries count as closed=false, extra entries are ignored.
@@ -205,6 +242,11 @@ func buildSummary(chat model.Chat, first, second string, matchV2 float64, in Sum
 	merged = clampOpen(merged)
 
 	description := in.Description
+	// Address scrub: the persona names take over wherever a summarizer
+	// echoed a raw 0x-address.
+	for addr, name := range names {
+		description = strings.ReplaceAll(description, addr, name)
+	}
 	if n := utf8.RuneCountInString(description); n > model.MaxSummaryDescriptionLen {
 		description = string([]rune(description)[:model.MaxSummaryDescriptionLen])
 	}

@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -187,6 +188,27 @@ func TestHardMatchValidation(t *testing.T) {
 	}
 	if _, _, err := d.HardMatch(ctx, "0xroom", "0xa", "0xc", summarizeStub(0, "")); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("missing chat: want ErrNotFound, got %v", err)
+	}
+}
+
+func TestHardMatchSanitizesAddresses(t *testing.T) {
+	// The summarizer echoed raw 0x-addresses into the text: the stored
+	// description must carry the persona NAMES instead.
+	d := openTestDB(t)
+	seedPairFixture(t, d, "0xchat")
+	ctx := context.Background()
+	leaky := func(ctx context.Context, chat model.Chat, msgs []model.Message, subject string) (SummaryInput, error) {
+		return SummaryInput{Description: "0xa had a warm chat with 0xb.", Closed: []bool{true, false, false}}, nil
+	}
+	summary, _, err := d.HardMatch(ctx, "0xroom", "0xa", "0xb", leaky)
+	if err != nil {
+		t.Fatalf("hard match: %v", err)
+	}
+	if strings.Contains(summary.Description, "0x") {
+		t.Fatalf("address leaked into the summary: %q", summary.Description)
+	}
+	if summary.Description != "a had a warm chat with b." {
+		t.Fatalf("description must use the persona names: %q", summary.Description)
 	}
 }
 
