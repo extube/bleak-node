@@ -10,8 +10,12 @@ FROM golang:1.26-alpine AS build
 WORKDIR /src
 
 # Cache the module graph first; sources change far more often.
+# BuildKit cache mounts keep the Go module + build caches across builds,
+# so a rebuild after a code change recompiles only changed packages
+# (seconds instead of a full ~1-2 min compile on small VPSes).
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
 
 # Sources. docs/ is required at build time: the server imports the
 # pre-generated swagger docs package (github.com/extube/bleak-node/docs).
@@ -19,7 +23,9 @@ COPY cmd/ cmd/
 COPY internal/ internal/
 COPY docs/ docs/
 
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" \
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" \
     -o /out/bleak-node ./cmd/server
 
 FROM alpine:3.21
