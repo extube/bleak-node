@@ -142,7 +142,7 @@ func TestWorkerSendsBestPairs(t *testing.T) {
 	// dominates: dave -> carol (99.94) and dave -> alice/bob (99.76, tie)
 	// take the budget of 2 — carol's clock is only 1h old now and her
 	// remaining pairs grade 90.2, erin's clock-only pairs 88.8. The room
-	// count (4 -> 6) stays under the cap (5^2/3 = 8).
+	// count (4 -> 6) stays far under the cap (5^2/2 = 12).
 	backdateRoomHandshakes(t, database, room.Address, 1)
 	if err := w.RunOnce(ctx); err != nil {
 		t.Fatalf("run thrice: %v", err)
@@ -160,7 +160,7 @@ func TestWorkerSendsBestPairs(t *testing.T) {
 }
 
 // TestWorkerStopsAtRoomCap verifies the cap check directly: at or above
-// N^2/3 handshakes (N = active users) the room is skipped on the job.
+// N^2/2 handshakes (N = active users) the room is skipped on the job.
 func TestWorkerStopsAtRoomCap(t *testing.T) {
 	database := matchTestDB(t)
 	ctx := context.Background()
@@ -172,7 +172,7 @@ func TestWorkerStopsAtRoomCap(t *testing.T) {
 	if _, err := database.CreateRoomInvite(ctx, room.Address, time.Now().Add(db.DefaultInviteExpiry)); err != nil {
 		t.Fatalf("create invite: %v", err)
 	}
-	// Three active users cap the room at 3 (3^2/3); the pair alice <-> bob
+	// Three active users cap the room at 4 (3^2/2); the pair alice <-> bob
 	// already carries both directions, so only carol's pairs are new.
 	addr := map[string]string{}
 	for _, name := range []string{"alice", "bob", "carol"} {
@@ -198,7 +198,7 @@ func TestWorkerStopsAtRoomCap(t *testing.T) {
 	if err := w.RunOnce(ctx); err != nil {
 		t.Fatalf("run once: %v", err)
 	}
-	// The count (2) sits under the cap (3): the budget of 1 goes to the
+	// The count (2) sits under the cap (4): the budget of 1 goes to the
 	// best NEW pair — the all-equal scores break on addresses, so the
 	// stable contract is one fresh send involving carol.
 	bobOut := outgoing(t, database, addr["bob"])
@@ -212,8 +212,7 @@ func TestWorkerStopsAtRoomCap(t *testing.T) {
 		t.Fatalf("the fresh handshake must involve carol: %v/%v/%v", aliceOut, bobOut, carolOut)
 	}
 
-	// Seed one more (the room is now at its cap of 3): the next job must
-	// send nothing.
+	// Seed the room up to its cap of 4: the next job must send nothing.
 	if _, err := database.ExecContext(ctx,
 		`INSERT INTO handshakes (tx_id, from_address, to_address, room, status, value, created_at)
 		 VALUES ('0xtxc', ?, ?, ?, 1, 1, ?)`, addr["carol"], addr["alice"], room.Address, now); err != nil {
