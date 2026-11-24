@@ -1,0 +1,36 @@
+# bleak-node deployment: REST server on port 8989.
+#
+# Start:  docker compose up -d --build
+# Logs:   docker compose logs -f
+# Stop:   docker compose down
+#
+# The SQLite database lives in ./data/ on the host (gitignored, persisted
+# across restarts). To keep the existing dev database, copy it in first:
+#   cp bleak-node.db data/
+# LLM/agent/matcher settings are read from .env (see .env.example); the
+# environment block below takes precedence over the file.
+
+services:
+  bleak-node:
+    build: .
+    image: bleak-node:latest
+    container_name: bleak-node
+    restart: unless-stopped
+    ports:
+      - "8989:8989"
+    environment:
+      BLEAK_NODE_ADDR: 0.0.0.0:8989
+      BLEAK_NODE_DB: /app/data/bleak-node.db
+    # LLM endpoint/model/key, agent & matcher toggles. The env block above
+    # always wins over this file (the app never overwrites real env vars).
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8989/api/room"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
