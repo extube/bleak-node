@@ -83,3 +83,42 @@ func TestRussianPromptsStayLocalized(t *testing.T) {
 		t.Fatalf("transition prompt was not localized: %#v", transition)
 	}
 }
+
+// TestRoomLanguageDominatesPersonaLanguage: the ROOM language rules the
+// dialog no matter what language the persona data is written in — a
+// "Foreigner" (English name/greeting/bios) in a Russian room must be
+// instructed to write Russian, and the mirror case for English rooms
+// (issue #52).
+func TestRoomLanguageDominatesPersonaLanguage(t *testing.T) {
+	foreigner := model.User{Name: "Foreigner", Address: "0xa", PublicBio: "Loves chess", PrivateBio: "New in town"}
+	local := model.User{Name: "Аня", Address: "0xb", PublicBio: "Гончар"}
+	theme := Themes[0]
+
+	ruPrompt := buildPrompt(theme, model.PhaseNetworking, foreigner, local, nil, 1, false, "", "ru")
+	if !strings.Contains(ruPrompt[0].Content, "независимо от языка имени, приветствия или биографий") {
+		t.Fatalf("Russian prompt missing the language-dominance rule: %q", ruPrompt[0].Content)
+	}
+	if !strings.Contains(ruPrompt[0].Content, "Весь текст реплики должен быть на русском языке") {
+		t.Fatalf("Russian prompt lost its base language instruction: %q", ruPrompt[0].Content)
+	}
+
+	enPrompt := buildPrompt(theme, model.PhaseNetworking, local, foreigner, nil, 1, false, "", "en")
+	if !strings.Contains(enPrompt[0].Content, "regardless of the language of the name, greeting, or bios") {
+		t.Fatalf("English prompt missing the language-dominance rule: %q", enPrompt[0].Content)
+	}
+
+	cases := []struct{ lang, want string }{
+		{"ru", "независимо от языка имени, приветствия или биографий"},
+		{"en", "regardless of the language of the name, greeting, or bios"},
+	}
+	for _, c := range cases {
+		goodbye := buildGoodbyePrompt(theme, foreigner, "Как дела?", c.lang)
+		if !strings.Contains(goodbye[0].Content, c.want) {
+			t.Fatalf("%s farewell prompt missing the language-dominance rule: %q", c.lang, goodbye[0].Content)
+		}
+		transition := buildTransitionPrompt(theme, foreigner, local, nil, c.lang)
+		if !strings.Contains(transition[0].Content, c.want) {
+			t.Fatalf("%s transition prompt missing the language-dominance rule: %q", c.lang, transition[0].Content)
+		}
+	}
+}

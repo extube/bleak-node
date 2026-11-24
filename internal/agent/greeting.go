@@ -136,11 +136,22 @@ func withoutQuestions(s string) string {
 }
 
 // FallbackGreeting builds a plain greeting from the public bio when the
-// LLM is unavailable: still non-empty, still question-free.
+// LLM is unavailable: still non-empty, still question-free. The greeting
+// must hold the room language on its own — a bio fragment written in
+// another language (an English bio of a "Foreigner" persona in a Russian
+// room) would flip the language detection and fail the chat's first-turn
+// validation (issue #52), so it is dropped instead.
 func FallbackGreeting(name, publicBio string, russian bool) string {
 	bio := firstSentence(publicBio)
 	bio = strings.TrimPrefix(bio, name)
 	bio = strings.TrimSpace(bio)
+	language := "en"
+	if russian {
+		language = "ru"
+	}
+	if bio != "" && !model.TextMatchesLanguage(bio, language) {
+		bio = ""
+	}
 	if russian {
 		if bio == "" {
 			return "Привет, я " + name + ". 👋"
@@ -182,10 +193,13 @@ func firstSentence(bio string) string {
 }
 
 // greetingOrFallback returns the greeting a user posts at the start of a
-// chat: the stored greeting when present, otherwise the chat-language
-// template (legacy users created before the greeting field existed).
+// chat: the stored greeting when present AND in the room language,
+// otherwise the chat-language template. A greeting that misses the room
+// language (e.g. an English "Foreigner" persona in a Russian room) would
+// fail the chat's first-turn language validation and stall every dialog of
+// the persona — the room-language template takes over instead (issue #52).
 func greetingOrFallback(u model.User, language string) string {
-	if g := strings.TrimSpace(u.Greeting); g != "" {
+	if g := strings.TrimSpace(u.Greeting); g != "" && model.TextMatchesLanguage(g, language) {
 		return g
 	}
 	return FallbackGreeting(u.Name, u.PublicBio, isRussian(language))

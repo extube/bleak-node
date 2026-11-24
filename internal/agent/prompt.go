@@ -14,6 +14,17 @@ import (
 // replayed to the LLM.
 const transcriptLimit = 12
 
+// languageDominance is the rule that keeps a room single-language no matter
+// what language the persona data is written in: the dialog language is the
+// ROOM's, never the persona's — a "Foreigner" in a Russian room chats in
+// Russian, a Russian-named persona in an English room chats in English.
+func languageDominance(russian bool) string {
+	if russian {
+		return "ЯЗЫК ЧАТА: весь ответ пиши строго по-русски (кириллицей) — независимо от языка имени, приветствия или биографий. Даже если персонаж иностранец или его данные на другом языке, все реплики в этом чате пишутся по-русски."
+	}
+	return "CHAT LANGUAGE: write every reply strictly in English, regardless of the language of the name, greeting, or bios. Even if the persona is a foreigner or their data is in another language, all replies in this chat are written in English."
+}
+
 // buildPrompt assembles a language-specific system and user prompt for the
 // next message of the speaker inside the chat.
 func buildPrompt(theme Theme, phase string, speaker, listener model.User, msgs []model.Message, speakerTurns int, overLimit bool, nudge, language string) []llmMessage {
@@ -45,6 +56,10 @@ Write one or two short natural sentences, about 25 words and under 200 character
 Never add quotes, labels like "Agent:", markdown, or explanations; never write raw addresses (0x...). Use the other person's name only when it sounds natural.`,
 			speaker.Name, speaker.Address, bioOrNone(speaker.PublicBio), bioOrNone(speaker.PrivateBio))
 	}
+	// The room language dominates the persona's data language: the closing
+	// sentence sits last in the system prompt so it out-weighs the persona
+	// cues (an English name or greeting) replayed in the transcript.
+	sys += "\n\n" + languageDominance(russian)
 
 	var b strings.Builder
 	// The theme belongs to the debate phase only; the networking phase runs on
@@ -131,6 +146,7 @@ If the partner's latest message contains an unanswered question, answer it brief
 Then close warmly and casually. Do not ask another question or introduce a new topic. Do not invent a reason for leaving; “I should get going” is enough. Do not mention conversation details except what is needed to answer. Do not name the listener or write raw addresses. Finish with a common goodbye.
 Farewell direction: ` + theme.Scenario.Goodbye
 	}
+	sys += "\n\n" + languageDominance(russian)
 
 	b := strings.Builder{}
 	b.WriteString(instructions)
@@ -314,6 +330,7 @@ Write briefly, casually, and warmly, like a person texting. Do not invent person
 - casually suggest moving on to the theme "%s";
 - no question, contact details, or concrete meetup plans. Do not make it sound like a checklist or a pitch.`, listener.Name, listener.Name, theme.Name)
 	}
+	sys += "\n\n" + languageDominance(russian)
 
 	b := strings.Builder{}
 	b.WriteString(task)
