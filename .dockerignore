@@ -1,0 +1,17 @@
+# Keep the build context minimal. docs/ stays: the server imports the
+# pre-generated swagger docs package at build time.
+.git/
+.githooks/
+bin/
+data/
+docs/refs/
+*.db
+*.db-shm
+*.db-wal
+.env
+*.md
+Makefile
+dialogs-*.txt
+Dockerfile
+docker-compose.yml
+.dockerignore

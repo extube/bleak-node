@@ -63,7 +63,7 @@ func (s *Server) WithSummarizer(summarizer ChatSummarizer) *Server {
 // the pure interest overlap, no time and no handshake input.
 //
 //	@Summary		matching-interest percent of two users
-//	@Description	Computes the matching points of two personas inside one room as the pure matching-interest percent: points = 100 * 2 * exact_interest_matches / (total interests of the first + total interests of the second), where an exact match is the same group AND key counted on both sides. Two personas with identical interest sets grade 100, pairs with nothing shared grade 0; time and handshakes weigh nothing, so the same interest sets always grade the same. The handshake flags of the response stay informational. Requires the FIRST persona's Bearer token; both users must live in the room.
+//	@Description	Computes the matching points of two personas inside one room as the pure matching-interest percent: points = 100 * 2 * exact_interest_matches / (mutual_group_total + 1), where an exact match is the same group AND key counted on both sides and mutual_group_total counts the chosen interests of BOTH users restricted to MUTUAL groups (groups chosen by both users; issue #53). No mutual group grades 0; time and handshakes weigh nothing, so the same interest sets always grade the same. The handshake flags of the response stay informational. Requires the FIRST persona's Bearer token; both users must live in the room.
 //	@Tags			matching
 //	@Security		UserToken
 //	@Accept			json

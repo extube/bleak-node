@@ -562,7 +562,7 @@
                         "UserToken": []
                     }
                 ],
-                "description": "Summarizes the chat of the pair, grades the networking checklist (both introduced themselves, found a shared topic, balanced turns, questions answered, warm farewell), merges the checkpoint result with the time-independent match score (POST /api/match/v2) and stores one Summary per pair. The method activates only once: a repeated call for a pair that already has a summary returns the stored record without re-summarizing. Handshakes impact NO value: the method is only reachable for pairs with a mutual handshake anyway (the chat requires both directions), so the soft score entering the merge is driven by shared interests alone. The merged score stays strictly inside (0, 100) and a full match (\u003e 80) is rare: hard = 50 + 50 * tanh((closed - 3) / 2) keeps an average 3/5 chat at the neutral 50 and a perfect 5/5 conversation at 88.08, so the merged score only crosses 80 when the interest-driven soft score is strong as well. Requires the FIRST persona's Bearer token; both users must live in the room and their chat must exist.",
+                "description": "Summarizes the chat FROM THE FIRST USER'S PERSPECTIVE (the subject: how good the networking experience was for them, how useful the learned information is for their future aims and interests growth), grades the 3 strict networking criteria (shared_idea — the subject left the conversation with a new idea or insight worth developing further; expertise_exchange — each side learned something concrete about the other's work, skills or projects; reciprocal_dialog — both sides asked follow-up questions and contributed roughly equally) and merges the closed count with the time-independent match score: points = checklist_steps(closed) + 0.34 * MatchV2, where checklist_steps = 25 for the first, 25 for the second and 16 for the third closed criterion (issue #53) and MatchV2 = 100 * 2 * exact_interest_matches / (mutual_group_total + 1) — the pure matching-interest percent of POST /api/match/v2 counted over the interests of MUTUAL groups only (no time, no handshakes). Three closed criteria add 66, a full MatchV2 adds close to 34; the result is pinned strictly inside (0, 100). The summary is stored PER DIRECTION (user_a = requester): a repeated call for the same direction returns the stored record without re-summarizing; the reverse direction (B -\u003e A) is a separate record created by its own request. Requires the FIRST persona's Bearer token; both users must live in the room and their chat must exist.",
                 "consumes": [
                     "application/json"
                 ],
@@ -572,7 +572,7 @@
                 "tags": [
                     "matching"
                 ],
-                "summary": "hard match of two users",
+                "summary": "hard match of two users (per direction)",
                 "parameters": [
                     {
                         "description": "Hard match request",
@@ -672,7 +672,7 @@
                         "UserToken": []
                     }
                 ],
-                "description": "Computes the matching points (0..100) of two personas inside one room: points = 100 * (1 - 1/(C * 2^t)) with t the hours (float) since the FIRST persona's creation (computed server-side; the request carries no time). C = 1 + handshake directions (+1 per directed handshake between the two in the room) + the matching-interest percent (2 * exact interest matches / the interests total of both personas; every match is the same group AND key, counted on both sides — identical interest sets grade a full 100 %). The score grows with the first persona's age toward 100. Requires the FIRST persona's Bearer token; both users must live in the room.",
+                "description": "Computes the matching points (0..100) of two personas inside one room: points = 100 * (1 - 1/2^(sqrt(t) * (1 + 3.522 * C))) with t the hours (float) since the FIRST persona's last sent handshake in the room (since their creation when they never sent one; computed server-side; the request carries no time) and C = (2 + 2*H_r + 1*H_s) * matched_interests / total_interests_both_sides, where H_r is 1 when the OTHER persona's directed handshake to the first exists in the room (received handshakes count double), H_s is 1 when the first persona's handshake to the other exists, and matched/total is the exact interest matches (same group AND key, counted on both sides) over the interests total of both personas. C multiplies the age term: a relation-less pair grows on age alone, every unit of relation speeds the saturation up 3.522x; a fresh persona reads ~0 whatever the relation. Requires the FIRST persona's Bearer token; both users must live in the room.",
                 "consumes": [
                     "application/json"
                 ],
@@ -735,7 +735,7 @@
                         "UserToken": []
                     }
                 ],
-                "description": "Computes the matching points of two personas inside one room as the pure matching-interest percent: points = 100 * 2 * exact_interest_matches / (total interests of the first + total interests of the second), where an exact match is the same group AND key counted on both sides. Two personas with identical interest sets grade 100, pairs with nothing shared grade 0; time and handshakes weigh nothing, so the same interest sets always grade the same. The handshake flags of the response stay informational. Requires the FIRST persona's Bearer token; both users must live in the room.",
+                "description": "Computes the matching points of two personas inside one room as the pure matching-interest percent: points = 100 * 2 * exact_interest_matches / (mutual_group_total + 1), where an exact match is the same group AND key counted on both sides and mutual_group_total counts the chosen interests of BOTH users restricted to MUTUAL groups (groups chosen by both users; issue #53). No mutual group grades 0; time and handshakes weigh nothing, so the same interest sets always grade the same. The handshake flags of the response stay informational. Requires the FIRST persona's Bearer token; both users must live in the room.",
                 "consumes": [
                     "application/json"
                 ],

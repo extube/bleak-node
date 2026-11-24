@@ -39,7 +39,7 @@ func outgoing(t *testing.T, database *db.DB, user string) map[string]bool {
 	return out
 }
 
-func TestWorkerMatchesTopThree(t *testing.T) {
+func TestWorkerSendsBestPairs(t *testing.T) {
 	database := matchTestDB(t)
 	ctx := context.Background()
 
@@ -51,8 +51,12 @@ func TestWorkerMatchesTopThree(t *testing.T) {
 		t.Fatalf("create invite: %v", err)
 	}
 
-	// Five personas; Alice's exact-interest overlap ranks the others:
-	// Bob (1 of 1), Carol (1 of 2), Dave (1 of 3), Erin (nothing).
+	// Five personas with a clean interest ladder, all backdated to the same
+	// creation moment so every sender's t is equal and the pair ranking is
+	// driven by C alone: alice-bob grade C=1 (identical sets), the
+	// alice/bob-carol pairs C=0.8, carol-dave C=0.667, alice/bob-dave 0.5,
+	// everything with erin 0. The budget for 5 users is 4 pairs
+	// (2 * floor(sqrt(5))).
 	users := map[string][]int{
 		"alice": {1, 2, 3},
 		"bob":   {1, 2, 3},
@@ -74,39 +78,224 @@ func TestWorkerMatchesTopThree(t *testing.T) {
 			}
 		}
 	}
+	backdateRoomUsers(t, database, room.Address, 10)
+	// Carol's clock runs an hour behind: without it the C=0.8 pairs of
+	// alice/bob/carol tie exactly and the address tiebreak would pick the
+	// senders randomly. With it, job 1 is fully score-determined.
+	stamp9 := time.Now().UTC().Add(-9 * time.Hour)
+	if _, err := database.ExecContext(ctx,
+		`UPDATE users SET created_at = ? WHERE room = ? AND name = 'carol'`,
+		stamp9.Format(time.RFC3339), room.Address); err != nil {
+		t.Fatalf("backdate carol: %v", err)
+	}
 
 	w := New(database, slog.New(slog.NewTextHandler(&testSink{}, nil)))
 	if err := w.RunOnce(ctx); err != nil {
 		t.Fatalf("run once: %v", err)
 	}
 
-	// Job 1: exactly the top-3 get handshakes. The exact trio is
-	// deliberately not pinned: every handshake direction (an incoming one
-	// included) adds +1 to the score's C, so the ranking of a row depends
-	// on who was processed (and shook hands) before — e.g. erin, sharing
-	// nothing, can tie bob at 50 points by sending first. The stable
-	// contract is the COUNT here and FULL connectivity after job 2.
-	sent := outgoing(t, database, addr["alice"])
-	if len(sent) != 3 {
-		t.Fatalf("job 1 must send exactly 3 handshakes for alice, got %v", sent)
+	// Job 1, budget 2 (floor(sqrt(5))): the C=1 pair both ways (a->b,
+	// b->a) — the two best pairs of the pool, scored on the 10h-old
+	// sender clocks.
+	all := roomPairs(t, database, room.Address)
+	if len(all) != 2 {
+		t.Fatalf("job 1 must send exactly 2 handshakes, got %d: %v", len(all), all)
 	}
-	if sent[addr["alice"]] {
-		t.Fatalf("alice must not handshake herself: %v", sent)
+	ab := map[string]bool{
+		addr["alice"] + "->" + addr["bob"]: true,
+		addr["bob"] + "->" + addr["alice"]: true,
+	}
+	for _, p := range all {
+		key := p.FromAddress + "->" + p.ToAddress
+		if !ab[key] {
+			t.Fatalf("job 1 sent an unexpected pair %s (all: %v)", key, all)
+		}
+	}
+	if out := outgoing(t, database, addr["erin"]); len(out) != 0 {
+		t.Fatalf("erin shares nothing and must stay out of job 1, got %v", out)
 	}
 
-	// Job 2: the already-shaken pairs are skipped in favor of new ones, so
-	// alice ends up connected to every other active user.
+	// Job 2 runs immediately: alice's and bob's clocks were reset by their
+	// job-1 outreach (t ~ 0 zeroes the exponent), while carol (9h) and
+	// dave (10h) never sent — so the pool re-ranks around them and the
+	// budget of 2 goes to the carol -> alice, carol -> bob pair (both
+	// grade ~100 on carol's untouched clock, tied, both inside the cut).
 	if err := w.RunOnce(ctx); err != nil {
 		t.Fatalf("run twice: %v", err)
 	}
-	sent = outgoing(t, database, addr["alice"])
-	if len(sent) != 4 {
-		t.Fatalf("job 2 must connect alice to everyone, got %v", sent)
+	if out := outgoing(t, database, addr["carol"]); len(out) != 2 ||
+		!out[addr["alice"]] || !out[addr["bob"]] {
+		t.Fatalf("job 2 must connect carol to alice and bob, got %v", out)
 	}
-	for _, name := range []string{"bob", "carol", "dave", "erin"} {
-		if !sent[addr[name]] {
-			t.Fatalf("alice must handshake %s after job 2, sent %v", name, sent)
+	if out := outgoing(t, database, addr["alice"]); len(out) != 1 {
+		t.Fatalf("alice must not send again right after job 1, got %v", out)
+	}
+	if out := outgoing(t, database, addr["bob"]); len(out) != 1 {
+		t.Fatalf("bob must not send again right after job 1, got %v", out)
+	}
+	if out := outgoing(t, database, addr["erin"]); len(out) != 0 {
+		t.Fatalf("erin must stay out through job 2, got %v", out)
+	}
+
+	// Simulate an hour passing (every sent handshake backdated), then job
+	// 3: the existing pairs are skipped. Dave never sent, so his 10h clock
+	// dominates: dave -> carol (99.94) and dave -> alice/bob (99.76, tie)
+	// take the budget of 2 — carol's clock is only 1h old now and her
+	// remaining pairs grade 90.2, erin's clock-only pairs 88.8. The room
+	// count (4 -> 6) stays far under the cap (5^2/2 = 12).
+	backdateRoomHandshakes(t, database, room.Address, 1)
+	if err := w.RunOnce(ctx); err != nil {
+		t.Fatalf("run thrice: %v", err)
+	}
+	if out := outgoing(t, database, addr["dave"]); len(out) != 2 || !out[addr["carol"]] ||
+		!(out[addr["alice"]] || out[addr["bob"]]) {
+		t.Fatalf("job 3 must send dave -> carol plus one of dave -> alice/bob (tie), got %v", out)
+	}
+	if out := outgoing(t, database, addr["carol"]); len(out) != 2 {
+		t.Fatalf("carol must not send in job 3, got %v", out)
+	}
+	if out := outgoing(t, database, addr["erin"]); len(out) != 0 {
+		t.Fatalf("erin must still wait (her clock-only pairs grade below), got %v", out)
+	}
+}
+
+// TestWorkerStopsAtRoomCap verifies the cap check directly: at or above
+// N^2/2 handshakes (N = active users) the room is skipped on the job.
+func TestWorkerStopsAtRoomCap(t *testing.T) {
+	database := matchTestDB(t)
+	ctx := context.Background()
+
+	room := model.Room{Name: "Capped"}
+	if err := database.CreateRoom(ctx, &room, ""); err != nil {
+		t.Fatalf("create room: %v", err)
+	}
+	if _, err := database.CreateRoomInvite(ctx, room.Address, time.Now().Add(db.DefaultInviteExpiry)); err != nil {
+		t.Fatalf("create invite: %v", err)
+	}
+	// Three active users cap the room at 4 (3^2/2); the pair alice <-> bob
+	// already carries both directions, so only carol's pairs are new.
+	addr := map[string]string{}
+	for _, name := range []string{"alice", "bob", "carol"} {
+		u := model.User{Name: name}
+		if err := database.CreateUser(ctx, room.Address, &u, ""); err != nil {
+			t.Fatalf("create user %s: %v", name, err)
 		}
+		addr[name] = u.Address
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	for i, dir := range []struct{ from, to string }{
+		{addr["alice"], addr["bob"]}, {addr["bob"], addr["alice"]},
+	} {
+		if _, err := database.ExecContext(ctx,
+			`INSERT INTO handshakes (tx_id, from_address, to_address, room, status, value, created_at)
+			 VALUES (?, ?, ?, ?, 1, 1, ?)`,
+			"0xtx"+string(rune('a'+i)), dir.from, dir.to, room.Address, now); err != nil {
+			t.Fatalf("seed handshake: %v", err)
+		}
+	}
+
+	w := New(database, slog.New(slog.NewTextHandler(testSink{}, nil)))
+	if err := w.RunOnce(ctx); err != nil {
+		t.Fatalf("run once: %v", err)
+	}
+	// The count (2) sits under the cap (4): the budget of 1 goes to the
+	// best NEW pair — the all-equal scores break on addresses, so the
+	// stable contract is one fresh send involving carol.
+	bobOut := outgoing(t, database, addr["bob"])
+	carolOut := outgoing(t, database, addr["carol"])
+	aliceOut := outgoing(t, database, addr["alice"])
+	if len(bobOut)+len(carolOut)+len(aliceOut) != 3 {
+		t.Fatalf("under-cap room must send one new handshake, got %v/%v/%v", aliceOut, bobOut, carolOut)
+	}
+	if !carolOut[addr["alice"]] && !carolOut[addr["bob"]] &&
+		!aliceOut[addr["carol"]] && !bobOut[addr["carol"]] {
+		t.Fatalf("the fresh handshake must involve carol: %v/%v/%v", aliceOut, bobOut, carolOut)
+	}
+
+	// Seed the room up to its cap of 4: the next job must send nothing.
+	if _, err := database.ExecContext(ctx,
+		`INSERT INTO handshakes (tx_id, from_address, to_address, room, status, value, created_at)
+		 VALUES ('0xtxc', ?, ?, ?, 1, 1, ?)`, addr["carol"], addr["alice"], room.Address, now); err != nil {
+		t.Fatalf("seed handshake: %v", err)
+	}
+	before := 0
+	for _, name := range []string{"alice", "bob", "carol"} {
+		before += len(outgoing(t, database, addr[name]))
+	}
+	if err := w.RunOnce(ctx); err != nil {
+		t.Fatalf("run at cap: %v", err)
+	}
+	total := 0
+	for _, name := range []string{"alice", "bob", "carol"} {
+		total += len(outgoing(t, database, addr[name]))
+	}
+	if total != before {
+		t.Fatalf("at-cap room must not auto-send: %d -> %d", before, total)
+	}
+}
+
+// countOutgoing counts the handshakes one user sent inside one room.
+func countOutgoing(t *testing.T, database *db.DB, room, user string) int {
+	t.Helper()
+	rows, err := database.ListUserHandshakes(context.Background(), user)
+	if err != nil {
+		t.Fatalf("list handshakes: %v", err)
+	}
+	n := 0
+	for _, hs := range rows {
+		if hs.FromAddress == user && hs.Room == room {
+			n++
+		}
+	}
+	return n
+}
+
+// roomPairs lists every handshake of one room.
+func roomPairs(t *testing.T, database *db.DB, room string) []model.Handshake {
+	t.Helper()
+	var out []model.Handshake
+	rows, err := database.QueryContext(context.Background(),
+		`SELECT tx_id, from_address, to_address FROM handshakes
+		 WHERE room = ? AND from_address != ?`, room, room)
+	if err != nil {
+		t.Fatalf("list room handshakes: %v", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var hs model.Handshake
+		if err := rows.Scan(&hs.TxID, &hs.FromAddress, &hs.ToAddress); err != nil {
+			t.Fatalf("scan handshake: %v", err)
+		}
+		out = append(out, hs)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("list room handshakes: %v", err)
+	}
+	return out
+}
+
+// backdateRoomUsers sets every user's created_at of the room to now -
+// hours (the match formula's t falls back to that column when the user
+// never sent a handshake).
+func backdateRoomUsers(t *testing.T, database *db.DB, room string, hours float64) {
+	t.Helper()
+	stamp := time.Now().UTC().Add(-time.Duration(hours * float64(time.Hour)))
+	if _, err := database.ExecContext(context.Background(),
+		`UPDATE users SET created_at = ? WHERE room = ?`,
+		stamp.Format(time.RFC3339), room); err != nil {
+		t.Fatalf("backdate users: %v", err)
+	}
+}
+
+// backdateRoomHandshakes sets every handshake's created_at of the room to
+// now - hours (the match formula's t reads the sender's newest one).
+func backdateRoomHandshakes(t *testing.T, database *db.DB, room string, hours float64) {
+	t.Helper()
+	stamp := time.Now().UTC().Add(-time.Duration(hours * float64(time.Hour)))
+	if _, err := database.ExecContext(context.Background(),
+		`UPDATE handshakes SET created_at = ? WHERE room = ?`,
+		stamp.Format(time.RFC3339), room); err != nil {
+		t.Fatalf("backdate handshakes: %v", err)
 	}
 }
 
@@ -172,6 +361,9 @@ func TestWorkerSkipsInactiveUsersAndIdleRooms(t *testing.T) {
 		t.Fatalf("want 2 active users, got %d", len(active))
 	}
 
+	// Two active users cap the room at 1 (2^2/3): the single active pair
+	// grades a budget of 1 (floor(sqrt(2))), so exactly one direction is
+	// sent — which one follows the address tiebreak of two equal scores.
 	w := New(database, slog.New(slog.NewTextHandler(testSink{}, nil)))
 	if err := w.RunOnce(ctx); err != nil {
 		t.Fatalf("run once: %v", err)
@@ -179,12 +371,17 @@ func TestWorkerSkipsInactiveUsersAndIdleRooms(t *testing.T) {
 	if out := outgoing(t, database, pool[0].Address); len(out) != 0 {
 		t.Fatalf("inactive user must receive no handshakes, sent %v", out)
 	}
-	// bob and carol rank each other (no interests anywhere): both directions.
-	if out := outgoing(t, database, pool[1].Address); len(out) != 1 || !out[pool[2].Address] {
-		t.Fatalf("bob must handshake carol, got %v", out)
+	bobOut := outgoing(t, database, pool[1].Address)
+	carolOut := outgoing(t, database, pool[2].Address)
+	total := len(bobOut) + len(carolOut)
+	if total != 1 {
+		t.Fatalf("budget 1 must send exactly one handshake, got %d (%v / %v)", total, bobOut, carolOut)
 	}
-	if out := outgoing(t, database, pool[2].Address); len(out) != 1 || !out[pool[1].Address] {
-		t.Fatalf("carol must handshake bob, got %v", out)
+	if len(bobOut) == 1 && !bobOut[pool[2].Address] {
+		t.Fatalf("bob's single send must go to carol, got %v", bobOut)
+	}
+	if len(carolOut) == 1 && !carolOut[pool[1].Address] {
+		t.Fatalf("carol's single send must go to bob, got %v", carolOut)
 	}
 	// The idle room is untouched: its (nonexistent) users were never read.
 	var count int

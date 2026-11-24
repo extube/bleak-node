@@ -3,18 +3,23 @@ package agent
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/extube/bleak-node/internal/model"
 )
 
-// fakeSummaryLLM scripts the summarization answers.
+// fakeSummaryLLM scripts the summarization answers and records the prompt.
 type fakeSummaryLLM struct {
 	answer string
 	err    error
+	prompt string
 }
 
 func (f *fakeSummaryLLM) Complete(ctx context.Context, prompt []llmMessage) (string, error) {
+	if len(prompt) > 0 {
+		f.prompt = prompt[0].Content
+	}
 	return f.answer, f.err
 }
 
@@ -23,7 +28,7 @@ func summaryChat() (model.Chat, []model.Message) {
 	chat := model.Chat{Address: "0xchat", Room: "0xroom", Language: "en"}
 	msgs := []model.Message{
 		{From: "0xa", To: "0xb", Content: "Hello, I'm Alice."},
-		{From: "0xb", To: "0xa", Content: "Hi Alice! What do you do?"},
+		{From: "0xb", To: "0xa", Content: "Hi Alice! What do you do for work?"},
 		{From: "0xa", To: "0xb", Content: "I paint watercolor postcards."},
 		{From: "0xb", To: "0xa", Content: "A shared hobby of mine too."},
 	}
@@ -31,21 +36,22 @@ func summaryChat() (model.Chat, []model.Message) {
 }
 
 func TestSummarizeChatParsesLLM(t *testing.T) {
-	s := NewSummarizer(nil)
-	s.llm = &fakeSummaryLLM{answer: "```json\n" +
-		`{"summary": "Alice and Bob found a shared hobby.", "closed": ["introductions", "shared_topics"]}` +
+	llm := &fakeSummaryLLM{answer: "```json\n" +
+		`{"summary": "Alice left with an idea for a zine of her postcards.", "closed": ["shared_idea", "expertise_exchange"]}` +
 		"\n```"}
+	s := NewSummarizer(nil)
+	s.llm = llm
 	chat, msgs := summaryChat()
 
-	in, err := s.SummarizeChat(context.Background(), chat, msgs)
+	in, err := s.SummarizeChat(context.Background(), chat, msgs, "0xa")
 	if err != nil {
 		t.Fatalf("summarize: %v", err)
 	}
-	if in.Description != "Alice and Bob found a shared hobby." {
+	if in.Description != "Alice left with an idea for a zine of her postcards." {
 		t.Fatalf("description: %q", in.Description)
 	}
 	// The closed keys map onto the canonical order; the rest stay false.
-	want := []bool{true, true, false, false, false}
+	want := []bool{true, true, false}
 	if len(in.Closed) != len(want) {
 		t.Fatalf("closed flags: want %d, got %d", len(want), len(in.Closed))
 	}
@@ -53,6 +59,11 @@ func TestSummarizeChatParsesLLM(t *testing.T) {
 		if in.Closed[i] != w {
 			t.Fatalf("closed[%d] = %t, want %t", i, in.Closed[i], w)
 		}
+	}
+	// The prompt grades from the subject's perspective and marks their lines.
+	if !strings.Contains(llm.prompt, "FROM THE PERSPECTIVE of the user 0xa") ||
+		!strings.Contains(llm.prompt, "0xa ★") {
+		t.Fatalf("prompt must be subject-centric and mark the subject's lines: %q", llm.prompt)
 	}
 }
 
@@ -62,30 +73,35 @@ func TestSummarizeChatFallsBackToHeuristic(t *testing.T) {
 	s.llm = &fakeSummaryLLM{err: errors.New("gateway down")}
 	chat, msgs := summaryChat()
 
-	in, err := s.SummarizeChat(context.Background(), chat, msgs)
+	in, err := s.SummarizeChat(context.Background(), chat, msgs, "0xa")
 	if err != nil {
 		t.Fatalf("summarize must not fail: %v", err)
 	}
 	if in.Description == "" {
 		t.Fatal("heuristic description missing")
 	}
-	// Both sides spoke and a question was answered, but the transcript
-	// has no farewell marker yet.
-	if !in.Closed[0] || !in.Closed[2] || !in.Closed[3] {
+	if len(in.Closed) != 3 {
+		t.Fatalf("heuristic must grade the 3 criteria, got %d", len(in.Closed))
+	}
+	// The subject asked what the partner does (expertise), the partner
+	// answered with work details, and the exchange was balanced — the
+	// expertise and reciprocal criteria close; no contact markers in the
+	// transcript keep the follow-up open.
+	if !in.Closed[1] || !in.Closed[2] {
 		t.Fatalf("heuristic flags wrong: %v", in.Closed)
 	}
-	if in.Closed[4] {
-		t.Fatalf("farewell must stay open: %v", in.Closed)
+	if in.Closed[0] {
+		t.Fatalf("follow-up must stay open without contact evidence: %v", in.Closed)
 	}
 }
 
-func TestHeuristicSummaryClosesFarewell(t *testing.T) {
+func TestHeuristicClosesSharedIdea(t *testing.T) {
 	chat, msgs := summaryChat()
 	msgs = append(msgs,
-		model.Message{From: "0xa", To: "0xb", Content: goodbyeReply("en")},
+		model.Message{From: "0xa", To: "0xb", Content: "Wait — what if we turned these postcards into a little zine? I want to try that this month."},
 	)
-	in := HeuristicSummary(chat, msgs)
-	if !in.Closed[4] {
-		t.Fatalf("farewell marker must close the checkpoint: %v", in.Closed)
+	in := HeuristicSummary(chat, msgs, "0xa")
+	if !in.Closed[0] {
+		t.Fatalf("an idea to develop must close the shared_idea criterion: %v", in.Closed)
 	}
 }

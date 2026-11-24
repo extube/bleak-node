@@ -159,32 +159,32 @@ type Checkpoint struct {
 // labels live here; the summaries table stores only the closed flags and
 // the rehydration fills the labels back from this list.
 const (
-	CheckpointIntroductions = "introductions"
-	CheckpointSharedTopics  = "shared_topics"
-	CheckpointBalancedTurns = "balanced_turns"
-	CheckpointQuestions     = "questions_answered"
-	CheckpointWarmFarewell  = "warm_farewell"
+	CheckpointSharedIdea       = "shared_idea"
+	CheckpointExpertise        = "expertise_exchange"
+	CheckpointReciprocalDialog = "reciprocal_dialog"
 )
 
 // NetworkingCheckpoints is the fixed checklist the hard match grades: every
-// entry marks one criterion of a good networking conversation.
+// entry marks one criterion of a good networking conversation. The three
+// criteria are deliberately demanding (feature #43): they grade the
+// NETWORKING value of the dialog, not its politeness.
 func NetworkingCheckpoints(language string) []Checkpoint {
 	ru := language == "ru"
 	return []Checkpoint{
-		{Key: CheckpointIntroductions,
-			Label:  ternaryStr(ru, "Оба представились в начале разговора", "Both introduced themselves at the start"),
+		{Key: CheckpointSharedIdea,
+			Label: ternaryStr(ru,
+				"По итогам беседы удалось сформулировать перспективную идею, требующую дальнейшей проработки",
+				"Left the conversation with a new idea or insight worth developing further"),
 			Closed: false},
-		{Key: CheckpointSharedTopics,
-			Label:  ternaryStr(ru, "Нашли общую тему или интерес", "Found a shared topic or interest"),
+		{Key: CheckpointExpertise,
+			Label: ternaryStr(ru,
+				"Каждая сторона узнала что-то конкретное о работе, навыках или проектах другой",
+				"Each side learned something concrete about the other's work, skills or projects"),
 			Closed: false},
-		{Key: CheckpointBalancedTurns,
-			Label:  ternaryStr(ru, "Диалог сбалансирован: обе стороны активно участвовали", "Balanced dialog: both sides participated actively"),
-			Closed: false},
-		{Key: CheckpointQuestions,
-			Label:  ternaryStr(ru, "Вопросы были заданы и на них ответили", "Questions were asked and answered"),
-			Closed: false},
-		{Key: CheckpointWarmFarewell,
-			Label:  ternaryStr(ru, "Разговор закрыт тёплым прощанием", "Conversation closed with a warm farewell"),
+		{Key: CheckpointReciprocalDialog,
+			Label: ternaryStr(ru,
+				"Обе стороны задавали уточняющие вопросы и внесли примерно равный вклад в разговор",
+				"Both sides asked follow-up questions and contributed roughly equally"),
 			Closed: false},
 	}
 }

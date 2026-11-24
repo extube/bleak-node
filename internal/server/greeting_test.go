@@ -109,3 +109,4 @@ func TestGreetingGeneratedOnCreation(t *testing.T) {
 	}
 	resp.Body.Close()
 }
+

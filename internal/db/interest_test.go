@@ -118,8 +118,8 @@ func TestInterestValidation(t *testing.T) {
 	}
 }
 
-// backdateUser sets a user's created_at to now - hours (the formula's t is
-// read from that column).
+// backdateUser sets a user's created_at to now - hours (the formula's t
+// falls back to that column when the user never sent a handshake).
 func backdateUser(t *testing.T, db *DB, address string, hours float64) {
 	t.Helper()
 	created := time.Now().UTC().Add(-time.Duration(hours * float64(time.Hour)))
@@ -130,37 +130,67 @@ func backdateUser(t *testing.T, db *DB, address string, hours float64) {
 	}
 }
 
+// seedHandshake creates a directed handshake and backdates it to now -
+// hours (the formula's t reads the sender's newest handshake timestamp).
+func seedHandshake(t *testing.T, db *DB, from, to string, hours float64) {
+	t.Helper()
+	if _, err := db.CreateHandshake(context.Background(), &model.Handshake{
+		FromAddress: from, ToAddress: to, Status: model.DefaultStatus,
+	}); err != nil {
+		t.Fatalf("handshake %s->%s: %v", from, to, err)
+	}
+	sent := time.Now().UTC().Add(-time.Duration(hours * float64(time.Hour)))
+	if _, err := db.ExecContext(context.Background(),
+		`UPDATE handshakes SET created_at = ? WHERE from_address = ? AND to_address = ?`,
+		sent.Format(time.RFC3339), from, to); err != nil {
+		t.Fatalf("backdate handshake: %v", err)
+	}
+}
+
+// thirdUser creates a third persona in the room (a handshake target that
+// leaves the alice-bob relation coefficient untouched).
+func thirdUser(t *testing.T, db *DB, room, name string) string {
+	t.Helper()
+	u := model.User{Name: name}
+	if err := db.CreateUser(context.Background(), room, &u, ""); err != nil {
+		t.Fatalf("create user %s: %v", name, err)
+	}
+	return u.Address
+}
+
 func TestMatchPointsFormula(t *testing.T) {
 	db := interestTestDB(t)
 	ctx := context.Background()
 	room, alice, bob := seedInterestUsers(t, db)
+	carol := thirdUser(t, db, room, "Carol")
 
-	// Brand-new personas (t ~ 0), no handshake, no interests: C = 1 and
-	// points = 100 * (1 - 1/(1 * 2^t)) ~ 0.
+	// Brand-new personas, no handshake, no interests: C = 0 and t ~ 0 ->
+	// sqrt(0) = 0 -> 2^0 = 1 -> points ~ 0 (sqrt-amplified tiny clocks
+	// read under one point).
 	res, err := db.MatchPoints(ctx, room, alice, bob)
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
-	if res.Points < 0 || res.Points > 0.1 {
+	if res.Points < 0 || res.Points > 2 {
 		t.Fatalf("fresh pair must score ~0, got %v (%+v)", res.Points, res)
 	}
 	if res.MutualHandshake || res.Handshake || res.ExactMatches != 0 || res.SharedGroups != 0 {
 		t.Fatalf("unexpected breakdown: %+v", res)
 	}
 
-	// t = 1h (the FIRST persona's age), still no relations: C = 1 gives
-	// 100 * (1 - 1/2) = 50.
+	// Still nothing shared an hour later: C = 0, so the pair grows on age
+	// alone — t = 1 -> sqrt(1) = 1 -> 100 * (1 - 1/2) = 50.
 	backdateUser(t, db, alice, 1)
 	res, err = db.MatchPoints(ctx, room, alice, bob)
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
 	if math.Abs(res.Points-50) > 0.05 {
-		t.Fatalf("t=1h C=1: want ~50, got %v (%+v)", res.Points, res)
+		t.Fatalf("age-only pair (C=0): want ~50, got %v (%+v)", res.Points, res)
 	}
 
-	// Shared group only: the percent counts exact matches alone, so the
-	// score stays 50 — the group is reported in the breakdown.
+	// Shared group only: the coefficient counts exact matches alone, so
+	// C = 0 and the score stays 50 — the group is reported in the breakdown.
 	if _, err := db.AddUserInterests(ctx, room, alice, []model.Interest{{Title: "Chess", Group: 1, Key: 7}}); err != nil {
 		t.Fatalf("add A: %v", err)
 	}
@@ -172,11 +202,12 @@ func TestMatchPointsFormula(t *testing.T) {
 		t.Fatalf("match: %v", err)
 	}
 	if math.Abs(res.Points-50) > 0.05 || res.SharedGroups != 1 || res.ExactMatches != 0 {
-		t.Fatalf("shared group: want ~50 with 1 group, got %v (%+v)", res.Points, res)
+		t.Fatalf("shared group only: want ~50 with 1 group, got %v (%+v)", res.Points, res)
 	}
 
-	// Exact match (same group AND key): percent = 2*1/(1+2) = 2/3,
-	// C = 1 + 2/3 -> 100 * (1 - 1/(1.6667 * 2)) = 70.
+	// Exact match (same group AND key): matched/total = 1/3, no handshakes
+	// (factor 2) -> C = 2/3; t = 1 (creation fallback) ->
+	// exponent = sqrt(1) * (1 + 3.522 * 2/3) = 3.348 -> 90.18.
 	if _, err := db.AddUserInterests(ctx, room, bob, []model.Interest{{Title: "Chess", Group: 1, Key: 7}}); err != nil {
 		t.Fatalf("add B exact: %v", err)
 	}
@@ -184,64 +215,93 @@ func TestMatchPointsFormula(t *testing.T) {
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
-	if math.Abs(res.Points-70) > 0.05 || res.ExactMatches != 1 || res.SharedGroups != 1 {
-		t.Fatalf("exact match: want ~70, got %v (%+v)", res.Points, res)
+	if math.Abs(res.Points-90.18) > 0.05 || res.ExactMatches != 1 || res.SharedGroups != 1 {
+		t.Fatalf("exact match: want ~90.18, got %v (%+v)", res.Points, res)
 	}
 
-	// One-sided handshake: +1 direction, C = 1 + 1 + 2/3 -> 81.25.
-	if _, err := db.CreateHandshake(ctx, &model.Handshake{
-		FromAddress: alice, ToAddress: bob, Status: model.DefaultStatus,
-	}); err != nil {
-		t.Fatalf("handshake: %v", err)
-	}
+	// One-sided handshake FROM alice (sent 1h ago; the carol handshake
+	// keeps bob's pair the only scored one): H_s = 1, H_r = 0 ->
+	// C = 3 * 1/3 = 1 -> exponent = 1 * (1 + 3.522) = 4.522 -> 95.65.
+	seedHandshake(t, db, alice, carol, 1)
+	seedHandshake(t, db, alice, bob, 1)
 	res, err = db.MatchPoints(ctx, room, alice, bob)
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
-	if math.Abs(res.Points-81.25) > 0.05 || !res.Handshake || res.MutualHandshake {
-		t.Fatalf("one-sided handshake: want ~81.25, got %v (%+v)", res.Points, res)
+	if math.Abs(res.Points-95.65) > 0.05 || !res.Handshake || res.MutualHandshake {
+		t.Fatalf("one-sided handshake: want ~95.65, got %v (%+v)", res.Points, res)
 	}
 
-	// Mutual handshake: no instant 100 anymore — +1 more direction,
-	// C = 1 + 2 + 2/3 -> 100 * (1 - 1/(3.6667 * 2)) = 86.36.
-	if _, err := db.CreateHandshake(ctx, &model.Handshake{
-		FromAddress: bob, ToAddress: alice, Status: model.DefaultStatus,
-	}); err != nil {
-		t.Fatalf("handshake back: %v", err)
-	}
+	// Mutual handshake: H_r = 1 doubles the factor -> C = 5 * 1/3 = 5/3 ->
+	// exponent = 1 * (1 + 3.522 * 5/3) = 6.87 -> 99.15.
+	seedHandshake(t, db, bob, alice, 1)
 	res, err = db.MatchPoints(ctx, room, alice, bob)
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
-	if math.Abs(res.Points-86.36) > 0.05 || !res.MutualHandshake {
-		t.Fatalf("mutual handshake: want ~86.36, got %v (%+v)", res.Points, res)
+	if math.Abs(res.Points-99.15) > 0.05 || !res.MutualHandshake {
+		t.Fatalf("mutual handshake: want ~99.15, got %v (%+v)", res.Points, res)
+	}
+
+	// The multiplier wiring: backdating ALL of alice's sent handshakes to
+	// 4h doubles the sqrt term -> exponent = 2 * (1 + 3.522 * 5/3) = 13.74
+	// (the expected value is derived from the spec formula).
+	seedHandshake(t, db, alice, carol, 4)
+	seedHandshake(t, db, alice, bob, 4)
+	res, err = db.MatchPoints(ctx, room, alice, bob)
+	if err != nil {
+		t.Fatalf("match: %v", err)
+	}
+	expected := 100 * (1 - 1/math.Pow(2, math.Sqrt(4)*(1+3.522*5.0/3.0)))
+	if math.Abs(res.Points-expected) > 0.05 {
+		t.Fatalf("t=4 in the sqrt multiplier: want ~%.2f, got %v (%+v)", expected, res.Points, res)
 	}
 }
 
-func TestMatchPointsAgeSaturation(t *testing.T) {
+func TestMatchPointsSaturation(t *testing.T) {
 	db := interestTestDB(t)
 	ctx := context.Background()
 	room, alice, bob := seedInterestUsers(t, db)
 
-	// The age term saturates: after a long time even C = 1 saturates the
-	// formula at 100 (2^t overflows the denominator away).
+	// One identical interest on both sides: C = 2 * 1/2 = 1. A long idle
+	// time since the last outreach (creation fallback: none was sent)
+	// saturates the growth at 100.
 	backdateUser(t, db, alice, 4000)
+	if _, err := db.AddUserInterests(ctx, room, alice, []model.Interest{{Title: "Chess", Group: 1, Key: 7}}); err != nil {
+		t.Fatalf("add A: %v", err)
+	}
+	if _, err := db.AddUserInterests(ctx, room, bob, []model.Interest{{Title: "Chess", Group: 1, Key: 7}}); err != nil {
+		t.Fatalf("add B: %v", err)
+	}
 	res, err := db.MatchPoints(ctx, room, alice, bob)
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
 	if res.Points != 100 {
-		t.Fatalf("old persona: want 100, got %v", res.Points)
+		t.Fatalf("long-idle related pair: want 100, got %v", res.Points)
 	}
 
-	// The younger side's age does not matter: t comes from the FIRST user
-	// only, so the mirrored call with a fresh first user scores ~0 again.
+	// The other side's clock does not matter: t comes from the FIRST user
+	// only. The mirrored call with a fresh first user reads t ~ 0 ->
+	// exponent ~ 0 -> ~0 whatever the relation.
 	res, err = db.MatchPoints(ctx, room, bob, alice)
 	if err != nil {
 		t.Fatalf("match: %v", err)
 	}
-	if res.Points > 0.1 {
-		t.Fatalf("mirrored call must use the first user's age, got %v", res.Points)
+	if res.Points > 5 {
+		t.Fatalf("mirrored call must use the first user's clock, got %v", res.Points)
+	}
+
+	// A fresh handshake RESETS the sender's t: right after alice reaches
+	// out, her row drops from the saturated 100 back to ~0 (t ~ 0 zeroes
+	// the exponent; the "just matched, look elsewhere for now" effect).
+	seedHandshake(t, db, alice, bob, 0)
+	res, err = db.MatchPoints(ctx, room, alice, bob)
+	if err != nil {
+		t.Fatalf("match: %v", err)
+	}
+	if res.Points > 8 {
+		t.Fatalf("fresh outreach must reset t to ~0, got %v", res.Points)
 	}
 }
 

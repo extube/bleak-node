@@ -88,9 +88,18 @@ func TestGreetingOrFallback(t *testing.T) {
 	if got == "" || strings.ContainsRune(got, '?') {
 		t.Fatalf("legacy user greeting = %q", got)
 	}
-	stored := model.User{Name: "Sofia", Greeting: "Hello there."}
-	if got := greetingOrFallback(stored, "ru"); got != "Hello there." {
+	// The stored greeting wins only when it matches the room language.
+	stored := model.User{Name: "Аня", Greeting: "Привет! Я Аня, гончар."}
+	if got := greetingOrFallback(stored, "ru"); got != "Привет! Я Аня, гончар." {
 		t.Fatalf("stored greeting = %q, want the stored text", got)
+	}
+	// Issue #52: an off-language greeting (the "Foreigner" persona) must
+	// yield to the room-language template — otherwise the chat's first
+	// turn fails the room-language validation and the dialog never starts.
+	foreigner := model.User{Name: "Foreigner", PublicBio: "Loves chess", Greeting: "Привет, я Foreigner — I speak English entirely."}
+	got = greetingOrFallback(foreigner, "ru")
+	if strings.Contains(got, "I speak English") || !model.TextMatchesLanguage(got, "ru") {
+		t.Fatalf("off-language greeting not replaced by the room-language template: %q", got)
 	}
 }
 
