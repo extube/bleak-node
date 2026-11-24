@@ -29,7 +29,8 @@ func TestHardMatchPerDirection(t *testing.T) {
 	seedMessage(t, d, "0xchat", "0xb", "0xa", "Nice to meet you.", time.Now().UTC())
 	ctx := context.Background()
 
-	// No interests: MatchV2 = 0; 2 of 3 criteria closed grade 2 * 22 = 44.
+	// No interests: MatchV2 = 0; 2 of 3 criteria closed grade 25 + 25 = 50
+	// (the stepped checklist weights, issue #53).
 	summary, created, err := d.HardMatch(ctx, "0xroom", "0xa", "0xb",
 		summarizeStub(2, "A useful exchange."))
 	if err != nil {
@@ -38,8 +39,8 @@ func TestHardMatchPerDirection(t *testing.T) {
 	if !created {
 		t.Fatal("first hard match must create the record")
 	}
-	if summary.Score != 44 {
-		t.Fatalf("merged score: want 44 (22 * 2 closed, MatchV2 = 0), got %v", summary.Score)
+	if summary.Score != 50 {
+		t.Fatalf("merged score: want 50 (25 + 25 for 2 closed, MatchV2 = 0), got %v", summary.Score)
 	}
 	if summary.Chat != "0xchat" || summary.Room != "0xroom" {
 		t.Fatalf("chat/room wrong: %+v", summary)
@@ -108,8 +109,8 @@ func TestHardMatchPerDirection(t *testing.T) {
 }
 
 func TestHardMatchChecklistWeight(t *testing.T) {
-	// score = 16 * closed + 0.52 * MatchV2. With no interests MatchV2 = 0,
-	// so each closed criterion is exactly 16 points.
+	// score = checklistSteps(closed) + 0.34 * MatchV2 (issue #53). With no
+	// interests MatchV2 = 0, so the steps grade exactly 25 / 50 / 66.
 	d := openTestDB(t)
 	seedPairFixture(t, d, "0xchat")
 	ctx := context.Background()
@@ -125,7 +126,7 @@ func TestHardMatchChecklistWeight(t *testing.T) {
 			t.Fatalf("direction must be created once per stub run (closed=%d)", tc.closed)
 		}
 		if closed := tc.closed; closed > 0 {
-			if want := 22.0 * float64(closed); summary.Score != want {
+			if want := checklistPoints(closed); summary.Score != want {
 				t.Fatalf("closed=%d: want %.0f, got %v", closed, want, summary.Score)
 			}
 		} else if summary.Score != 0.01 {
@@ -157,8 +158,8 @@ func TestHardMatchHandshakesWeighNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("hard match: %v", err)
 	}
-	if summary.Score != 44 {
-		t.Fatalf("handshakes must weigh nothing: want 44, got %v", summary.Score)
+	if summary.Score != 50 {
+		t.Fatalf("handshakes must weigh nothing: want 50 (25 + 25), got %v", summary.Score)
 	}
 }
 
@@ -218,9 +219,10 @@ func TestHardMatchScoreStaysOpen(t *testing.T) {
 	seedMessage(t, d, "0xchat", "0xa", "0xb", "Hello!", time.Now().UTC())
 	ctx := context.Background()
 
-	// Identical interest sets grade the full MatchV2 = 100, and every
-	// criterion closed adds 48: the sum is exactly 100 and must still land
-	// strictly inside (0, 100).
+	// Identical interest sets grade MatchV2 = 100 * 2 * 30 / (60 + 1) =
+	// 98.36 (the +1 damper keeps it under 100, issue #53), and all three
+	// criteria closed add 66: 66 + 0.34 * 98.36 = 99.44 — the merged score
+	// now lands strictly inside (0, 100) by construction.
 	for i := 0; i < 30; i++ {
 		for _, addr := range []string{"0xa", "0xb"} {
 			if _, err := d.ExecContext(ctx,
@@ -238,7 +240,7 @@ func TestHardMatchScoreStaysOpen(t *testing.T) {
 	if summary.Score <= 0 || summary.Score >= 100 {
 		t.Fatalf("merged score left the open interval: %v", summary.Score)
 	}
-	if summary.Score != 99.99 {
-		t.Fatalf("perfect score must clamp to 99.99, got %v", summary.Score)
+	if summary.Score != 99.44 {
+		t.Fatalf("perfect score: want 99.44 (66 + 0.34 * 98.36), got %v", summary.Score)
 	}
 }

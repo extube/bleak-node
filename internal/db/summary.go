@@ -21,15 +21,29 @@ import (
 	"github.com/extube/bleak-node/internal/model"
 )
 
-// Summary weights (feature #49): the checklist carries 66% of the score
-// (3 criteria, 22 points each), the time-independent match score carries
-// 34%.
+// Summary weights (feature #49, amended by issue #53): the checklist
+// carries 66% of the score with STEPPED weights — the first closed
+// criterion adds 25, the second adds 25, the third adds 16 — and the
+// time-independent match score carries 34%.
 const (
-	summaryCheckpoints    = 3
-	summaryItemPoints     = 22.0
-	summaryChecklistShare = summaryCheckpoints * summaryItemPoints // 66
-	summaryMatchShare     = 0.34
+	summaryCheckpoints = 3
+	summaryMatchShare  = 0.34
 )
+
+// summaryChecklistSteps: points for the 1st, 2nd, 3rd closed criterion
+// (issue #53); 25 + 25 + 16 = 66.
+var summaryChecklistSteps = [3]float64{25.0, 25.0, 16.0}
+
+// checklistPoints sums the stepped weights of the closed criteria: the
+// order of closing does not matter — the weights ride the COUNT of closed
+// criteria (25 for one, 50 for two, 66 for all three).
+func checklistPoints(closedCount int) float64 {
+	points := 0.0
+	for i := 0; i < summaryCheckpoints && i < closedCount; i++ {
+		points += summaryChecklistSteps[i]
+	}
+	return points
+}
 
 // SummaryInput is what a chat summarizer feeds into the hard match: the
 // plain-text summarization and the closed flags aligned with the canonical
@@ -60,14 +74,16 @@ type SummarizeFunc func(ctx context.Context, chat model.Chat, msgs []model.Messa
 //     merged with the time-independent match score (MatchPointsV2) and the
 //     record is stored under the requester's direction:
 //
-//     points = 22 * closed + 0.34 * MatchV2
+//     points = checklistSteps(closed) + 0.34 * MatchV2
 //
-//     with MatchV2 = 100 * 2 * exactInterestMatches /
-//     (interests of the first + interests of the second) — the pure
-//     matching-interest percent, no time and no handshakes. Three closed
-//     criteria add 66, a full MatchV2 adds 34, so the merged score spans
-//     (0, 100) and is pinned into the open interval by the summaries table
-//     CHECK constraint.
+//     with checklistSteps = 25 for the first, 25 for the second and 16 for
+//     the third closed criterion (issue #53) and MatchV2 = 100 * 2 *
+//     exactInterestMatches / (mutualGroupTotal + 1) — the pure
+//     matching-interest percent of POST /api/match/v2 over the interests
+//     of MUTUAL groups only (no time, no handshakes). Three closed
+//     criteria add 66, a full MatchV2 adds close to 34; the merged score
+//     spans (0, 100) and is pinned into the open interval by the
+//     summaries table CHECK constraint.
 func (d *DB) HardMatch(ctx context.Context, roomAddress, first, second string, summarize SummarizeFunc) (model.Summary, bool, error) {
 	if first == second {
 		return model.Summary{}, false, errors.Join(ErrInvalid,
@@ -119,10 +135,15 @@ func (d *DB) HardMatch(ctx context.Context, roomAddress, first, second string, s
 	if err != nil {
 		return model.Summary{}, false, err
 	}
-	total := len(interestsA) + len(interestsB)
+	// The merge input is the PUBLIC match v2 formula (feature #43, amended
+	// by issue #53): only mutual-group interests count and the denominator
+	// carries a +1 damper (see MatchPointsV2). Computed inline on the read
+	// transaction (MatchPointsV2 itself opens one, and the
+	// single-connection pool would deadlock on the nested call).
+	mutualTotal := mutualGroupTotal(interestsA, interestsB)
 	v2 := 0.0
-	if total > 0 {
-		v2 = math.Round(100*(2*float64(overlap.ExactMatches)/float64(total))*100) / 100
+	if mutualTotal > 0 {
+		v2 = math.Round(100*(2*float64(overlap.ExactMatches)/float64(mutualTotal+1))*100) / 100
 	}
 
 	chat, found, err := findChat(ctx, tx, first, second)
@@ -217,15 +238,17 @@ func (d *DB) HardMatch(ctx context.Context, roomAddress, first, second string, s
 // 0x-address never leaks into the summary text even if the summarizer
 // echoed one back.
 //
-// The merged score (feature #49):
+// The merged score (feature #49, amended by issue #53):
 //
-//	points = 22 * closed + 0.34 * MatchV2
+//	points = checklistSteps(closed) + 0.34 * MatchV2
 //
-// with MatchV2 = 100 * 2 * exactInterestMatches / (interests of the first +
-// interests of the second) — the pure matching-interest percent, no time
-// and no handshakes. Three closed criteria add 66, a full MatchV2 adds 34;
-// the result is rounded to 2 decimals and pinned into the open interval
-// (0, 100) — the summaries table CHECK constraint enforces it.
+// with checklistSteps = 25 / 25 / 16 for the first / second / third closed
+// criterion and MatchV2 = 100 * 2 * exactInterestMatches /
+// (mutualGroupTotal + 1) — the pure matching-interest percent over the
+// interests of MUTUAL groups only, no time and no handshakes. Three closed
+// criteria add 66, a full MatchV2 adds close to 34; the result is rounded
+// to 2 decimals and pinned into the open interval (0, 100) — the
+// summaries table CHECK constraint enforces it.
 func buildSummary(chat model.Chat, first, second string, names map[string]string, matchV2 float64, in SummaryInput) (model.Summary, error) {
 	checkpoints := model.NetworkingCheckpoints(chat.Language)
 	// Normalize the closed flags against the canonical checklist: missing
@@ -237,7 +260,7 @@ func buildSummary(chat model.Chat, first, second string, names map[string]string
 			closedCount++
 		}
 	}
-	merged := summaryItemPoints*float64(closedCount) + summaryMatchShare*matchV2
+	merged := checklistPoints(closedCount) + summaryMatchShare*matchV2
 	merged = math.Round(merged*100) / 100
 	merged = clampOpen(merged)
 

@@ -927,16 +927,18 @@ paths:
         or insight worth developing further; expertise_exchange — each side learned
         something concrete about the other''s work, skills or projects; reciprocal_dialog
         — both sides asked follow-up questions and contributed roughly equally) and
-        merges the closed count with the time-independent match score: points = 22
-        * closed + 0.34 * MatchV2, where MatchV2 = 100 * 2 * exact_interest_matches
-        / (interests of the first + interests of the second) — the pure matching-interest
-        percent of POST /api/match/v2 (no time, no handshakes). Three closed criteria
-        add 66, a full MatchV2 adds 34; the result is pinned strictly inside (0, 100).
-        The summary is stored PER DIRECTION (user_a = requester): a repeated call
-        for the same direction returns the stored record without re-summarizing; the
-        reverse direction (B -> A) is a separate record created by its own request.
-        Requires the FIRST persona''s Bearer token; both users must live in the room
-        and their chat must exist.'
+        merges the closed count with the time-independent match score: points = checklist_steps(closed)
+        + 0.34 * MatchV2, where checklist_steps = 25 for the first, 25 for the second
+        and 16 for the third closed criterion (issue #53) and MatchV2 = 100 * 2 *
+        exact_interest_matches / (mutual_group_total + 1) — the pure matching-interest
+        percent of POST /api/match/v2 counted over the interests of MUTUAL groups
+        only (no time, no handshakes). Three closed criteria add 66, a full MatchV2
+        adds close to 34; the result is pinned strictly inside (0, 100). The summary
+        is stored PER DIRECTION (user_a = requester): a repeated call for the same
+        direction returns the stored record without re-summarizing; the reverse direction
+        (B -> A) is a separate record created by its own request. Requires the FIRST
+        persona''s Bearer token; both users must live in the room and their chat must
+        exist.'
       parameters:
       - description: Hard match request
         in: body
@@ -1062,12 +1064,13 @@ paths:
       - application/json
       description: 'Computes the matching points of two personas inside one room as
         the pure matching-interest percent: points = 100 * 2 * exact_interest_matches
-        / (total interests of the first + total interests of the second), where an
-        exact match is the same group AND key counted on both sides. Two personas
-        with identical interest sets grade 100, pairs with nothing shared grade 0;
-        time and handshakes weigh nothing, so the same interest sets always grade
-        the same. The handshake flags of the response stay informational. Requires
-        the FIRST persona''s Bearer token; both users must live in the room.'
+        / (mutual_group_total + 1), where an exact match is the same group AND key
+        counted on both sides and mutual_group_total counts the chosen interests of
+        BOTH users restricted to MUTUAL groups (groups chosen by both users; issue
+        #53). No mutual group grades 0; time and handshakes weigh nothing, so the
+        same interest sets always grade the same. The handshake flags of the response
+        stay informational. Requires the FIRST persona''s Bearer token; both users
+        must live in the room.'
       parameters:
       - description: Match request
         in: body
