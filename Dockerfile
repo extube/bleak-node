@@ -23,9 +23,13 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" \
     -o /out/bleak-node ./cmd/server
 
 FROM alpine:3.21
-RUN apk add --no-cache ca-certificates \
+RUN apk add --no-cache ca-certificates su-exec \
     && adduser -D -H -u 1000 bleak
 COPY --from=build /out/bleak-node /usr/local/bin/bleak-node
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh \
+    && mkdir -p /app/data \
+    && chown -R bleak:bleak /app
 
 # Config comes from the environment (docker-compose sets it); the app's
 # optional .env loading is a no-op here because no .env ships in the image.
@@ -36,5 +40,6 @@ WORKDIR /app
 VOLUME ["/app/data"]
 EXPOSE 8989
 
-USER bleak
-ENTRYPOINT ["bleak-node"]
+# Entrypoint starts as root (to fix /app/data ownership), then drops to
+# the unprivileged bleak user before exec'ing the server.
+ENTRYPOINT ["docker-entrypoint.sh"]
