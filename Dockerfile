@@ -29,11 +29,15 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     -o /out/bleak-node ./cmd/server
 
 FROM alpine:3.21
-RUN apk add --no-cache ca-certificates su-exec \
-    && adduser -D -H -u 1000 bleak
+# No apk here on purpose: busybox (already in the base image) provides
+# adduser/chmod/chown/su, and the base ships ca-certificates-bundle so Go
+# TLS works out of the box. The old `apk add ca-certificates su-exec`
+# step fetched from dl-cdn.alpinelinux.org and cost minutes on hosts with
+# a slow CDN route — the image build is now completely network-free.
 COPY --from=build /out/bleak-node /usr/local/bin/bleak-node
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh \
+    && adduser -D -H -u 1000 bleak \
     && mkdir -p /app/data \
     && chown -R bleak:bleak /app
 
