@@ -10,8 +10,12 @@ FROM golang:1.26-alpine AS build
 WORKDIR /src
 
 # Cache the module graph first; sources change far more often.
+# BuildKit cache mounts keep the Go module + build caches across builds,
+# so a rebuild after a code change recompiles only changed packages
+# (seconds instead of a full ~1-2 min compile on small VPSes).
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
 
 # Sources. docs/ is required at build time: the server imports the
 # pre-generated swagger docs package (github.com/extube/bleak-node/docs).
@@ -19,15 +23,21 @@ COPY cmd/ cmd/
 COPY internal/ internal/
 COPY docs/ docs/
 
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" \
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" \
     -o /out/bleak-node ./cmd/server
 
 FROM alpine:3.21
-RUN apk add --no-cache ca-certificates su-exec \
-    && adduser -D -H -u 1000 bleak
+# No apk here on purpose: busybox (already in the base image) provides
+# adduser/chmod/chown/su, and the base ships ca-certificates-bundle so Go
+# TLS works out of the box. The old `apk add ca-certificates su-exec`
+# step fetched from dl-cdn.alpinelinux.org and cost minutes on hosts with
+# a slow CDN route — the image build is now completely network-free.
 COPY --from=build /out/bleak-node /usr/local/bin/bleak-node
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh \
+    && adduser -D -H -u 1000 bleak \
     && mkdir -p /app/data \
     && chown -R bleak:bleak /app
 
